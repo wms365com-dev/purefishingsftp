@@ -2,6 +2,37 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
+function getLocalHourOfDay(isoValue, timezone) {
+  return Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).format(new Date(isoValue)));
+}
+
+function getLocalDateLabel(isoValue, timezone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    })
+      .formatToParts(new Date(isoValue))
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatHourWindowLabel(hour) {
+  const startDisplay = hour % 12 || 12;
+  const endDisplay = hour % 12 || 12;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${startDisplay}:00 ${suffix} - ${endDisplay}:59 ${suffix}`;
+}
+
 class MirrorDatabase {
   constructor(databasePath) {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -280,6 +311,35 @@ class MirrorDatabase {
       LIMIT ?
     `);
 
+    this.folderDayNewEventsStmt = this.db.prepare(`
+      SELECT
+        event_at,
+        folder_path,
+        file_name,
+        remote_path,
+        size
+      FROM file_events
+      WHERE
+        event_type = 'new' AND
+        folder_path = ? AND
+        event_at >= ? AND
+        event_at < ?
+      ORDER BY event_at ASC, id ASC
+    `);
+
+    this.dailyTrendEventsStmt = this.db.prepare(`
+      SELECT
+        event_at,
+        folder_path,
+        size
+      FROM file_events
+      WHERE
+        event_type = 'new' AND
+        event_at >= ? AND
+        event_at < ?
+      ORDER BY event_at ASC, id ASC
+    `);
+
     this.fileEventByIdStmt = this.db.prepare(`
       SELECT
         id,
@@ -429,6 +489,12 @@ class MirrorDatabase {
       dailyFolderIntake: options.dailyIntakeRange
         ? this.getDailyFolderIntake(options.dailyIntakeRange.startIso, options.dailyIntakeRange.endIso, options.dailyIntakeLimit || 20)
         : [],
+      asnHourlyReport: options.asnHourlyRange && options.asnReportFolder && options.timezone
+        ? this.getHourlyFolderIntake(options.asnReportFolder, options.asnHourlyRange.startIso, options.asnHourlyRange.endIso, options.timezone)
+        : null,
+      dailyFolderTrend: options.dailyTrendRange && options.timezone
+        ? this.getDailyFolderTrend(options.dailyTrendRange.startIso, options.dailyTrendRange.endIso, options.dailyTrendRange.dayLabels || [], options.timezone)
+        : null,
       activitySummary: this.getFileEventSummary(filters),
       fileActivity: this.listFileEvents(filters, limit)
     };
@@ -507,6 +573,131 @@ class MirrorDatabase {
 
   getDailyFolderIntake(startIso, endIso, limit = 20) {
     return this.dailyFolderIntakeStmt.all(startIso, endIso, limit);
+  }
+
+  getHourlyFolderIntake(folderPath, startIso, endIso, timezone) {
+    const rows = this.folderDayNewEventsStmt.all(folderPath, startIso, endIso);
+    const hourlyRows = Array.from({ length: 24 }, (_, hour) => ({
+      hour24: hour,
+      hour_label: formatHourWindowLabel(hour),
+      added_count: 0,
+      added_bytes: 0,
+      first_event_at: null,
+      last_event_at: null,
+      is_peak: false
+    }));
+
+    for (const row of rows) {
+      const hour = getLocalHourOfDay(row.event_at, timezone);
+      const bucket = hourlyRows[hour];
+      bucket.added_count += 1;
+      bucket.added_bytes += Number(row.size || 0);
+      bucket.first_event_at = bucket.first_event_at || row.event_at;
+      bucket.last_event_at = row.event_at;
+    }
+
+    const totalAdded = hourlyRows.reduce((sum, row) => sum + row.added_count, 0);
+    const totalBytes = hourlyRows.reduce((sum, row) => sum + row.added_bytes, 0);
+    const activeHours = hourlyRows.filter((row) => row.added_count > 0).length;
+    const peakCount = Math.max(...hourlyRows.map((row) => row.added_count), 0);
+    const peakHour = peakCount > 0
+      ? hourlyRows.find((row) => row.added_count === peakCount)
+      : null;
+
+    for (const row of hourlyRows) {
+      row.is_peak = peakCount > 0 && row.added_count === peakCount;
+    }
+
+    return {
+      folderPath,
+      rows: hourlyRows,
+      summary: {
+        totalAdded,
+        totalBytes,
+        activeHours,
+        peakCount,
+        peakHourLabel: peakHour ? peakHour.hour_label : ""
+      }
+    };
+  }
+
+  getDailyFolderTrend(startIso, endIso, dayLabels, timezone) {
+    const rows = this.dailyTrendEventsStmt.all(startIso, endIso);
+    const dayBuckets = new Map(
+      dayLabels.map((label) => [
+        label,
+        {
+          label,
+          totalAdded: 0,
+          totalBytes: 0,
+          items: [],
+          folderMap: new Map()
+        }
+      ])
+    );
+    const distinctFolders = new Set();
+
+    for (const row of rows) {
+      const dayLabel = getLocalDateLabel(row.event_at, timezone);
+      const bucket = dayBuckets.get(dayLabel);
+      if (!bucket) {
+        continue;
+      }
+
+      const folderPath = row.folder_path;
+      const addedBytes = Number(row.size || 0);
+      const existing = bucket.folderMap.get(folderPath) || {
+        folder_path: folderPath,
+        added_count: 0,
+        added_bytes: 0
+      };
+
+      existing.added_count += 1;
+      existing.added_bytes += addedBytes;
+      bucket.folderMap.set(folderPath, existing);
+      bucket.totalAdded += 1;
+      bucket.totalBytes += addedBytes;
+      distinctFolders.add(folderPath);
+    }
+
+    const days = dayLabels.map((label) => {
+      const bucket = dayBuckets.get(label) || {
+        label,
+        totalAdded: 0,
+        totalBytes: 0,
+        items: [],
+        folderMap: new Map()
+      };
+      const items = Array.from(bucket.folderMap.values())
+        .sort((left, right) => right.added_count - left.added_count || left.folder_path.localeCompare(right.folder_path));
+
+      return {
+        label,
+        totalAdded: bucket.totalAdded,
+        totalBytes: bucket.totalBytes,
+        activeFolders: items.length,
+        items
+      };
+    });
+
+    const peakDay = days.reduce((best, day) => {
+      if (!best || day.totalAdded > best.totalAdded) {
+        return day;
+      }
+      return best;
+    }, null);
+
+    return {
+      days,
+      summary: {
+        daysTracked: dayLabels.length,
+        totalAdded: days.reduce((sum, day) => sum + day.totalAdded, 0),
+        totalBytes: days.reduce((sum, day) => sum + day.totalBytes, 0),
+        activeFolders: distinctFolders.size,
+        peakDayLabel: peakDay?.label || "",
+        peakDayCount: peakDay?.totalAdded || 0
+      }
+    };
   }
 
   getAlertSummary(startIso, endIso) {

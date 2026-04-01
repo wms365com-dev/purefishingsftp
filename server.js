@@ -28,6 +28,59 @@ const scheduler = new SyncScheduler(mirrorService, config, console, {
   }
 });
 
+function parseDateLabel(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+    return null;
+  }
+
+  const [year, month, day] = String(value).split("-").map((part) => Number(part));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function shiftDateLabel(dateLabel, offsetDays) {
+  const parsed = parseDateLabel(dateLabel);
+  if (!parsed) {
+    return "";
+  }
+
+  const shifted = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + offsetDays));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
+}
+
+function listDateLabels(startLabel, count) {
+  return Array.from({ length: count }, (_, index) => shiftDateLabel(startLabel, index));
+}
+
+function buildDailyTrendRange(endDateValue, dayCount, timezone) {
+  const rangeDays = Math.min(Math.max(Number.parseInt(dayCount, 10) || 7, 3), 30);
+  const endRange = endDateValue
+    ? getLocalDayRange(endDateValue, timezone)
+    : getLocalDayRange(new Date(), timezone);
+
+  if (!endRange) {
+    return null;
+  }
+
+  const startLabel = shiftDateLabel(endRange.label, -(rangeDays - 1));
+  const startRange = getLocalDayRange(startLabel, timezone);
+  if (!startRange) {
+    return null;
+  }
+
+  return {
+    days: rangeDays,
+    startLabel,
+    endLabel: endRange.label,
+    startIso: startRange.startIso,
+    endIso: endRange.endIso,
+    dayLabels: listDateLabels(startLabel, rangeDays)
+  };
+}
+
 function sendHtml(response, statusCode, html) {
   response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
   response.end(html);
@@ -80,7 +133,10 @@ function parseActivityFilters(searchParams) {
     dateFrom: searchParams.get("date_from")?.trim() || "",
     dateTo: searchParams.get("date_to")?.trim() || "",
     runId: searchParams.get("run_id")?.trim() || "",
-    intakeDate: searchParams.get("intake_date")?.trim() || ""
+    intakeDate: searchParams.get("intake_date")?.trim() || "",
+    asnDate: searchParams.get("asn_date")?.trim() || "",
+    trendDate: searchParams.get("trend_date")?.trim() || "",
+    trendDays: searchParams.get("trend_days")?.trim() || ""
   };
 
   if (!["new", "changed", "unchanged", "deleted", ""].includes(filters.status)) {
@@ -114,6 +170,27 @@ function parseActivityFilters(searchParams) {
     filters.intakeRange = intakeRange;
   } else {
     filters.intakeDate = "";
+  }
+
+  const asnRange = filters.asnDate
+    ? getLocalDayRange(filters.asnDate, config.timezone)
+    : getLocalDayRange(new Date(), config.timezone);
+
+  if (asnRange) {
+    filters.asnDate = asnRange.label;
+    filters.asnRange = asnRange;
+  } else {
+    filters.asnDate = "";
+  }
+
+  const trendRange = buildDailyTrendRange(filters.trendDate, filters.trendDays, config.timezone);
+  if (trendRange) {
+    filters.trendDate = trendRange.endLabel;
+    filters.trendDays = trendRange.days;
+    filters.trendRange = trendRange;
+  } else {
+    filters.trendDate = "";
+    filters.trendDays = 7;
   }
 
   const runId = Number.parseInt(filters.runId, 10);
@@ -157,6 +234,18 @@ function buildQueryString(filters) {
     searchParams.set("intake_date", filters.intakeDate);
   }
 
+  if (filters.asnDate) {
+    searchParams.set("asn_date", filters.asnDate);
+  }
+
+  if (filters.trendDate) {
+    searchParams.set("trend_date", filters.trendDate);
+  }
+
+  if (filters.trendDays) {
+    searchParams.set("trend_days", String(filters.trendDays));
+  }
+
   return searchParams.toString();
 }
 
@@ -184,9 +273,16 @@ function buildDashboardHtml(requestUrl) {
     folderLimit: 50,
     runLimit: 25,
     dailyIntakeRange: filters.intakeRange,
-    dailyIntakeLimit: 20
+    dailyIntakeLimit: 20,
+    asnHourlyRange: filters.asnRange,
+    asnReportFolder: config.asnReportFolder,
+    dailyTrendRange: filters.trendRange,
+    timezone: config.timezone
   });
   const queryString = buildQueryString(filters);
+  const asnCsvQueryString = new URLSearchParams({
+    asn_date: filters.asnDate || ""
+  }).toString();
 
   return renderDashboard({
     dashboard,
@@ -199,9 +295,20 @@ function buildDashboardHtml(requestUrl) {
       label: filters.intakeRange ? filters.intakeRange.label : "",
       totalAdded: (dashboard.dailyFolderIntake || []).reduce((sum, item) => sum + item.added_count, 0)
     },
+    asn: {
+      date: filters.asnDate,
+      label: filters.asnRange ? filters.asnRange.label : "",
+      summary: dashboard.asnHourlyReport?.summary || null
+    },
+    trend: {
+      date: filters.trendDate,
+      days: filters.trendDays,
+      summary: dashboard.dailyFolderTrend?.summary || null
+    },
     links: {
       activityCsv: `/reports/files.csv${queryString ? `?${queryString}` : ""}`,
-      runsCsv: "/reports/runs.csv"
+      runsCsv: "/reports/runs.csv",
+      asnHourlyCsv: `/reports/asn-hourly.csv${asnCsvQueryString ? `?${asnCsvQueryString}` : ""}`
     }
   });
 }
@@ -310,6 +417,37 @@ const server = http.createServer((request, response) => {
       200,
       rowsToCsv(
         ["id", "trigger_source", "started_at", "finished_at", "status", "discovered_files", "new_files", "changed_files", "deleted_files", "downloaded_files", "snapshot_dir", "message"],
+        rows
+      ),
+      "text/csv; charset=utf-8"
+    );
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/reports/asn-hourly.csv") {
+    const filters = parseActivityFilters(requestUrl.searchParams);
+    const report = database.getHourlyFolderIntake(
+      config.asnReportFolder,
+      filters.asnRange.startIso,
+      filters.asnRange.endIso,
+      config.timezone
+    );
+
+    const rows = report.rows.map((row) => ({
+      date: filters.asnDate,
+      folder_path: config.asnReportFolder,
+      hour_label: row.hour_label,
+      hour_24: row.hour24,
+      added_files: row.added_count,
+      added_bytes: row.added_bytes,
+      first_event_at: row.first_event_at,
+      last_event_at: row.last_event_at
+    }));
+
+    return sendText(
+      response,
+      200,
+      rowsToCsv(
+        ["date", "folder_path", "hour_label", "hour_24", "added_files", "added_bytes", "first_event_at", "last_event_at"],
         rows
       ),
       "text/csv; charset=utf-8"

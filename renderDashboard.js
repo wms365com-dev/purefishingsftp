@@ -19,6 +19,42 @@ function formatDateTime(value, timezone) {
   }).format(new Date(value));
 }
 
+function formatTimeOnly(value, timezone) {
+  if (!value) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    timeStyle: "short"
+  }).format(new Date(value));
+}
+
+function formatDateLabel(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+    return String(value || "-");
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(`${value}T00:00:00Z`));
+}
+
+function shortenFolderPath(folderPath) {
+  const segments = String(folderPath || "")
+    .split("/")
+    .filter(Boolean);
+
+  if (segments.length <= 2) {
+    return folderPath || "/";
+  }
+
+  return `${segments.slice(-2).join("/")}`;
+}
+
 function formatDuration(seconds) {
   if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) {
     return "Calculating...";
@@ -213,17 +249,22 @@ function renderActivityCards(rows, timezone) {
   `).join("");
 }
 
-function renderHiddenFilterInputs(filters) {
+function renderHiddenFilterInputs(filters, options = {}) {
   const entries = [
     ["q", filters.q],
     ["status", filters.status],
     ["folder", filters.folder],
     ["date_from", filters.dateFrom],
     ["date_to", filters.dateTo],
-    ["run_id", filters.runId]
+    ["run_id", filters.runId],
+    options.includeIntakeDate ? ["intake_date", filters.intakeDate] : null,
+    options.includeAsnDate ? ["asn_date", filters.asnDate] : null,
+    options.includeTrendDate ? ["trend_date", filters.trendDate] : null,
+    options.includeTrendDays ? ["trend_days", filters.trendDays] : null
   ];
 
   return entries
+    .filter(Boolean)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
     .join("");
@@ -260,10 +301,121 @@ function renderDailyIntakeRows(rows) {
   }).join("");
 }
 
-function renderDashboard({ dashboard, config, serviceState, flashMessage, filters, intake = {}, links }) {
+function renderAsnHourlyRows(report, timezone) {
+  if (!report || !report.rows || !report.rows.length) {
+    return `<tr><td colspan="6" class="empty">No ASN activity has been logged yet.</td></tr>`;
+  }
+
+  const maxAdded = Math.max(...report.rows.map((row) => Number(row.added_count) || 0), 1);
+
+  return report.rows.map((row) => {
+    const addedCount = Number(row.added_count) || 0;
+    const width = addedCount > 0
+      ? Math.max(10, Math.round((addedCount / maxAdded) * 100))
+      : 0;
+
+    return `
+      <tr class="${row.is_peak ? "asn-row-peak" : ""}">
+        <td>${escapeHtml(row.hour_label)}</td>
+        <td>${escapeHtml(addedCount)}</td>
+        <td>${escapeHtml(formatSize(row.added_bytes))}</td>
+        <td>${escapeHtml(formatTimeOnly(row.first_event_at, timezone))}</td>
+        <td>${escapeHtml(formatTimeOnly(row.last_event_at, timezone))}</td>
+        <td><div class="bar asn-bar"><span style="width:${width}%"></span></div></td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function renderAsnHourlyCards(report, timezone) {
+  if (!report || !report.rows || !report.rows.length) {
+    return `<div class="mobile-empty">No ASN activity has been logged yet.</div>`;
+  }
+
+  const activeRows = report.rows.filter((row) => Number(row.added_count) > 0);
+  if (!activeRows.length) {
+    return `<div class="mobile-empty">No ASN confirmations were added on the selected day.</div>`;
+  }
+
+  const maxAdded = Math.max(...activeRows.map((row) => Number(row.added_count) || 0), 1);
+
+  return activeRows.map((row) => {
+    const addedCount = Number(row.added_count) || 0;
+    const width = Math.max(10, Math.round((addedCount / maxAdded) * 100));
+
+    return `
+      <article class="mobile-card ${row.is_peak ? "asn-card-peak" : ""}">
+        <div class="mobile-card-head">
+          <div>
+            <span class="mobile-card-kicker">ASN hour</span>
+            <strong class="mobile-card-title">${escapeHtml(row.hour_label)}</strong>
+          </div>
+          <span class="mobile-chip">${escapeHtml(addedCount)} files</span>
+        </div>
+        <div class="mobile-card-stats">
+          <div class="mobile-stat"><span>Added Size</span><strong>${escapeHtml(formatSize(row.added_bytes))}</strong></div>
+          <div class="mobile-stat"><span>Peak</span><strong>${row.is_peak ? "Yes" : "No"}</strong></div>
+        </div>
+        <div class="bar asn-bar"><span style="width:${width}%"></span></div>
+        <div class="mobile-card-note">
+          <div><strong>First arrival:</strong> ${escapeHtml(formatTimeOnly(row.first_event_at, timezone))}</div>
+          <div><strong>Last arrival:</strong> ${escapeHtml(formatTimeOnly(row.last_event_at, timezone))}</div>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderDailyTrendCards(report) {
+  if (!report || !report.days || !report.days.length) {
+    return `<div class="mobile-empty">No daily folder chart data yet.</div>`;
+  }
+
+  const maxDayTotal = Math.max(...report.days.map((day) => Number(day.totalAdded) || 0), 1);
+
+  return report.days.map((day) => {
+    const totalWidth = day.totalAdded > 0
+      ? Math.max(10, Math.round((day.totalAdded / maxDayTotal) * 100))
+      : 0;
+    const dayMax = Math.max(...day.items.map((item) => Number(item.added_count) || 0), 1);
+    const rows = day.items.length
+      ? day.items.map((item) => {
+        const width = Math.max(10, Math.round((item.added_count / dayMax) * 100));
+        return `
+          <div class="trend-bar-row">
+            <div class="trend-bar-head">
+              <span class="trend-folder-label" title="${escapeHtml(item.folder_path)}">${escapeHtml(shortenFolderPath(item.folder_path))}</span>
+              <span class="mobile-chip">${escapeHtml(item.added_count)} new</span>
+            </div>
+            <div class="trend-track"><span style="width:${width}%"></span></div>
+          </div>
+        `;
+      }).join("")
+      : `<div class="trend-empty">No new files were added on this day.</div>`;
+
+    return `
+      <article class="trend-day-card">
+        <div class="trend-day-head">
+          <div>
+            <span class="mobile-card-kicker">Day</span>
+            <strong class="mobile-card-title">${escapeHtml(formatDateLabel(day.label))}</strong>
+          </div>
+          <span class="mobile-chip">${escapeHtml(day.totalAdded)} files</span>
+        </div>
+        <div class="trend-day-meta">${escapeHtml(day.activeFolders)} folder(s) active • ${escapeHtml(formatSize(day.totalBytes))}</div>
+        <div class="bar trend-total-bar"><span style="width:${totalWidth}%"></span></div>
+        <div class="trend-rows">${rows}</div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderDashboard({ dashboard, config, serviceState, flashMessage, filters, intake = {}, asn = {}, trend = {}, links }) {
   const summary = dashboard.summary || {};
   const activitySummary = dashboard.activitySummary || {};
   const dailyFolderIntake = dashboard.dailyFolderIntake || [];
+  const asnHourlyReport = dashboard.asnHourlyReport || null;
+  const dailyFolderTrend = dashboard.dailyFolderTrend || null;
   const statusText = serviceState.running ? "Sync running" : "Idle";
   const currentRun = serviceState.currentRun || null;
   const disableNotice = config.autoSyncEnabled ? "" : `<p class="flash warn">Automatic sync is disabled.</p>`;
@@ -278,6 +430,10 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const intakeTotalBytes = dailyFolderIntake.reduce((sum, entry) => sum + (Number(entry.added_bytes) || 0), 0);
   const intakeLeader = dailyFolderIntake[0] || null;
   const intakeDateLabel = intake.label || intake.date || "";
+  const asnSummary = asn.summary || asnHourlyReport?.summary || null;
+  const asnDateLabel = asn.label || asn.date || "";
+  const trendSummary = trend.summary || dailyFolderTrend?.summary || null;
+  const trendDateLabel = trend.date || "";
 
   const autoRefreshScript = serviceState.running ? `
   <script>
@@ -846,11 +1002,139 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       text-align: center;
     }
 
+    .asn-report-head {
+      display: grid;
+      gap: 0.9rem;
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: end;
+    }
+
+    .asn-note {
+      margin-top: 0.9rem;
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      border: 1px solid rgba(31, 157, 104, 0.14);
+      background: linear-gradient(135deg, rgba(31, 157, 104, 0.08), rgba(76, 192, 255, 0.08));
+      line-height: 1.45;
+    }
+
+    .asn-row-peak {
+      background: rgba(31, 157, 104, 0.08);
+    }
+
+    .asn-bar {
+      min-width: 150px;
+      background: rgba(31, 157, 104, 0.08);
+    }
+
+    .asn-bar span {
+      background: linear-gradient(90deg, #1f9d68, #4cc0ff);
+    }
+
+    .asn-card-peak {
+      border-color: rgba(31, 157, 104, 0.22);
+      background: linear-gradient(180deg, rgba(31, 157, 104, 0.08), #ffffff);
+    }
+
+    .trend-head {
+      display: grid;
+      gap: 0.9rem;
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: end;
+    }
+
+    .trend-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.9rem;
+      margin-top: 1rem;
+    }
+
+    .trend-day-card {
+      display: grid;
+      gap: 0.7rem;
+      padding: 0.95rem;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+    }
+
+    .trend-day-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.7rem;
+      align-items: flex-start;
+    }
+
+    .trend-day-meta {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .trend-total-bar {
+      background: rgba(76, 192, 255, 0.12);
+    }
+
+    .trend-total-bar span {
+      background: linear-gradient(90deg, #1768ff, #4cc0ff);
+    }
+
+    .trend-rows {
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .trend-bar-row {
+      display: grid;
+      gap: 0.35rem;
+    }
+
+    .trend-bar-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.7rem;
+      align-items: center;
+    }
+
+    .trend-folder-label {
+      min-width: 0;
+      font-weight: 700;
+      line-height: 1.25;
+      word-break: break-word;
+    }
+
+    .trend-track {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(23, 104, 255, 0.08);
+    }
+
+    .trend-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #1f9d68, #4cc0ff);
+    }
+
+    .trend-empty {
+      padding: 0.7rem 0.8rem;
+      border-radius: 14px;
+      border: 1px dashed var(--line);
+      color: var(--muted);
+      background: var(--panel-2);
+      text-align: center;
+    }
+
     @media (max-width: 1040px) {
       .hero, .section-grid { grid-template-columns: 1fr; }
       .summary-grid, .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form.filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .intake-header { grid-template-columns: 1fr; }
+      .asn-report-head { grid-template-columns: 1fr; }
+      .trend-head { grid-template-columns: 1fr; }
+      .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 760px) {
@@ -967,6 +1251,15 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       .intake-topline, .intake-foot {
         flex-direction: column;
       }
+
+      .trend-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .trend-day-head, .trend-bar-head {
+        flex-direction: column;
+        align-items: flex-start;
+      }
     }
   </style>
 </head>
@@ -1069,7 +1362,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <p class="meta">A per-day intake board that shows which folders grew, how many fresh files landed there, and how much data was added.</p>
         </div>
         <form class="intake-controls" method="get" action="/">
-          ${renderHiddenFilterInputs(filters)}
+          ${renderHiddenFilterInputs(filters, { includeAsnDate: true, includeTrendDate: true, includeTrendDays: true })}
           <label>
             Selected Day
             <input type="date" name="intake_date" value="${escapeHtml(intake.date || "")}">
@@ -1089,6 +1382,87 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           : `No new files were logged for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}.`}
       </div>
       <div class="intake-list">${renderDailyIntakeRows(dailyFolderIntake)}</div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">Daily Chart</div>
+      <div class="trend-head">
+        <div class="form-copy">
+          <h2>Files Added By Day And Folder</h2>
+          <p class="meta">A rolling bar-chart view that shows how many new files each folder received on each day in the selected window.</p>
+        </div>
+        <form class="intake-controls" method="get" action="/">
+          ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeAsnDate: true })}
+          <label>
+            End Day
+            <input type="date" name="trend_date" value="${escapeHtml(trend.date || "")}">
+          </label>
+          <label>
+            Window
+            <select name="trend_days">
+              <option value="7"${Number(trend.days) === 7 ? " selected" : ""}>Last 7 days</option>
+              <option value="14"${Number(trend.days) === 14 ? " selected" : ""}>Last 14 days</option>
+              <option value="30"${Number(trend.days) === 30 ? " selected" : ""}>Last 30 days</option>
+            </select>
+          </label>
+          <button type="submit">Show Chart</button>
+        </form>
+      </div>
+      <div class="summary-grid intake-summary">
+        <div class="summary-card"><span>End Day</span><strong>${escapeHtml(trendDateLabel || "Today")}</strong></div>
+        <div class="summary-card"><span>Days Shown</span><strong>${escapeHtml(trendSummary?.daysTracked || trend.days || 0)}</strong></div>
+        <div class="summary-card"><span>Total New Files</span><strong>${escapeHtml(trendSummary?.totalAdded || 0)}</strong></div>
+        <div class="summary-card"><span>Folders Active</span><strong>${escapeHtml(trendSummary?.activeFolders || 0)}</strong></div>
+        <div class="summary-card"><span>Peak Day</span><strong>${escapeHtml(trendSummary?.peakDayLabel ? `${formatDateLabel(trendSummary.peakDayLabel)} (${trendSummary.peakDayCount})` : "No activity")}</strong></div>
+        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(trendSummary?.totalBytes || 0))}</strong></div>
+      </div>
+      <div class="trend-grid">${renderDailyTrendCards(dailyFolderTrend)}</div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">ASN Hourly</div>
+      <div class="asn-report-head">
+        <div class="form-copy">
+          <h2>ASN Confirmations By Hour</h2>
+          <p class="meta">Track how many new ASN confirmation files landed in ${escapeHtml(config.asnReportFolder)} each hour of the selected day.</p>
+        </div>
+        <form class="intake-controls" method="get" action="/">
+          ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeTrendDate: true, includeTrendDays: true })}
+          <label>
+            ASN Day
+            <input type="date" name="asn_date" value="${escapeHtml(asn.date || "")}">
+          </label>
+          <button type="submit">Show ASN Day</button>
+          <a class="button-link secondary" href="${escapeHtml(links.asnHourlyCsv)}">Export ASN CSV</a>
+        </form>
+      </div>
+      <div class="summary-grid intake-summary">
+        <div class="summary-card"><span>ASN Day</span><strong>${escapeHtml(asnDateLabel || "Today")}</strong></div>
+        <div class="summary-card"><span>ASN Files Added</span><strong>${escapeHtml(asnSummary?.totalAdded || 0)}</strong></div>
+        <div class="summary-card"><span>Active Hours</span><strong>${escapeHtml(asnSummary?.activeHours || 0)}</strong></div>
+        <div class="summary-card"><span>Peak Hour</span><strong>${escapeHtml(asnSummary?.peakHourLabel ? `${asnSummary.peakHourLabel} (${asnSummary.peakCount})` : "No activity")}</strong></div>
+        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(asnSummary?.totalBytes || 0))}</strong></div>
+      </div>
+      <div class="asn-note">
+        ${asnSummary?.peakHourLabel
+          ? `Busiest ASN hour on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}: <strong>${escapeHtml(asnSummary.peakHourLabel)}</strong> with <strong>${escapeHtml(asnSummary.peakCount)} file(s)</strong> added.`
+          : `No ASN confirmation files were added in ${escapeHtml(config.asnReportFolder)} on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}.`}
+      </div>
+      <section class="desktop-only">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hour</th><th>Added Files</th><th>Added Size</th><th>First Arrival</th><th>Last Arrival</th><th>Visual</th>
+              </tr>
+            </thead>
+            <tbody>${renderAsnHourlyRows(asnHourlyReport, config.timezone)}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="mobile-only">
+        <div class="mobile-card-list">${renderAsnHourlyCards(asnHourlyReport, config.timezone)}</div>
+      </section>
     </section>
 
     <section class="section-grid desktop-only">

@@ -225,6 +225,7 @@ function loadConfig() {
     autoSyncEnabled: parseBoolean(process.env.AUTO_SYNC_ENABLED, true),
     activityPageSize: Math.min(Math.max(parseNumber(process.env.ACTIVITY_PAGE_SIZE, 50), 10), 250),
     snapshotRetentionDays: Math.max(parseNumber(process.env.SNAPSHOT_RETENTION_DAYS, 0), 0),
+    asnReportFolder: normalizeRemoteRoot(process.env.ASN_REPORT_FOLDER || "/BlueDog/ASN/Production"),
     schedule: resolveSchedule(),
     alerts: {
       webhookUrl: process.env.ALERT_WEBHOOK_URL || "",
@@ -289,6 +290,7 @@ function getPublicConfig(config) {
     alertsConfigured,
     sftpHost: config.sftp.host,
     sftpPort: config.sftp.port,
+    asnReportFolder: config.asnReportFolder,
     authMode: config.sftp.privateKey ? "private key" : "password"
   };
 }

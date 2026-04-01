@@ -41,6 +41,7 @@ SFTP_USERNAME=BlueDog
 SFTP_PASSWORD=your-password-here
 REMOTE_ROOT=/
 APP_TIMEZONE=America/New_York
+ASN_REPORT_FOLDER=/BlueDog/ASN/Production
 AUTO_SYNC_ENABLED=true
 SYNC_TARGET_START_HOUR=8
 SYNC_TARGET_END_HOUR=17
@@ -56,6 +57,7 @@ Optional general settings:
 - `SFTP_PORT=22`
 - `SFTP_PASSPHRASE=`
 - `APP_TIMEZONE=America/New_York`
+- `ASN_REPORT_FOLDER=/BlueDog/ASN/Production`
 - `AUTO_SYNC_ENABLED=true`
 - `SYNC_TARGET_START_HOUR=8`
 - `SYNC_TARGET_END_HOUR=17`
@@ -90,6 +92,8 @@ The dashboard includes:
 - `Run Sync Now` manual trigger.
 - Recent sync runs with changed, deleted, and downloaded counts.
 - Total file counts by folder.
+- A daily folder bar chart that shows new files by day and by folder over the last 7, 14, or 30 days.
+- A dedicated ASN hourly report for `/BlueDog/ASN/Production` by default, with per-hour file counts and CSV export.
 - Search filters for file/path, status, folder, run id, and date range.
 - Direct download links for archived files when a snapshot exists.
 - `Export Activity CSV` for filtered file history.
