@@ -260,6 +260,11 @@ class MirrorDatabase {
       LIMIT ?
     `);
 
+    this.trackedFileEstimateStmt = this.db.prepare(`
+      SELECT
+        COALESCE((SELECT MAX(total_file_count) FROM folder_stats), 0) AS tracked_files
+    `);
+
     this.fileEventByIdStmt = this.db.prepare(`
       SELECT
         id,
@@ -475,6 +480,11 @@ class MirrorDatabase {
 
   getFileEventById(id) {
     return this.fileEventByIdStmt.get(id);
+  }
+
+  getTrackedFileEstimate() {
+    const row = this.trackedFileEstimateStmt.get();
+    return row?.tracked_files || 0;
   }
 
   getAlertSummary(startIso, endIso) {

@@ -121,16 +121,25 @@ class SftpMirrorService {
     }
 
     const startedAt = toIsoString();
+    const estimatedTotalFiles = this.database.getTrackedFileEstimate();
     this.runningContext = {
       triggerSource,
       startedAt,
       phase: "queued",
       currentPath: "",
       discoveredFiles: 0,
+      estimatedTotalFiles,
+      totalFiles: 0,
+      processedFiles: 0,
       newFiles: 0,
       changedFiles: 0,
       deletedFiles: 0,
       downloadedFiles: 0,
+      percentComplete: 0,
+      etaSeconds: null,
+      lastCompletedPath: "",
+      lastCompletedEvent: "",
+      lastCompletedAt: null,
       message: "Queued to start..."
     };
     this.runningPromise = this.runSync(triggerSource, startedAt)
@@ -149,6 +158,7 @@ class SftpMirrorService {
     const runId = this.database.createRun(triggerSource, startedAt);
     const sftp = new SftpClient("purefishing-sftp-mirror");
     let runResult = null;
+    const estimatedTotalFiles = this.database.getTrackedFileEstimate();
     const progress = {
       runId,
       triggerSource,
@@ -156,10 +166,18 @@ class SftpMirrorService {
       phase: "starting",
       currentPath: "",
       discoveredFiles: 0,
+      estimatedTotalFiles,
+      totalFiles: 0,
+      processedFiles: 0,
       newFiles: 0,
       changedFiles: 0,
       deletedFiles: 0,
       downloadedFiles: 0,
+      percentComplete: 0,
+      etaSeconds: null,
+      lastCompletedPath: "",
+      lastCompletedEvent: "",
+      lastCompletedAt: null,
       message: "Preparing sync..."
     };
 
@@ -216,6 +234,7 @@ class SftpMirrorService {
 
       this.updateProgress(runId, progress, {
         phase: "comparing",
+        totalFiles: discovered.files.length,
         deletedFiles: deletedFiles.length,
         message: `Scan complete. ${discovered.files.length} file(s) discovered, ${deletedFiles.length} deletion(s) detected.`
       });
@@ -251,6 +270,13 @@ class SftpMirrorService {
         if (!changed) {
           file.downloaded = false;
           file.eventSnapshotPath = existing ? existing.last_snapshot_path : null;
+          this.updateProgress(runId, progress, {
+            processedFiles: progress.processedFiles + 1,
+            lastCompletedPath: file.remotePath,
+            lastCompletedEvent: file.eventType,
+            lastCompletedAt: toIsoString(),
+            message: `Processed ${progress.processedFiles + 1} of ${progress.totalFiles || progress.discoveredFiles} files. Latest: ${file.remotePath}`
+          });
           continue;
         }
 
@@ -271,7 +297,11 @@ class SftpMirrorService {
         file.eventSnapshotPath = localPath;
         file.checksum = await hashFile(localPath);
         this.updateProgress(runId, progress, {
+          processedFiles: progress.processedFiles + 1,
           downloadedFiles: progress.downloadedFiles + 1,
+          lastCompletedPath: file.remotePath,
+          lastCompletedEvent: file.eventType,
+          lastCompletedAt: toIsoString(),
           message: `Downloaded ${progress.downloadedFiles + 1} file(s). Latest: ${file.remotePath}`
         });
       }
@@ -418,8 +448,47 @@ class SftpMirrorService {
 
   updateProgress(runId, progress, patch) {
     Object.assign(progress, patch);
+    this.deriveProgress(progress);
     this.runningContext = { ...progress };
     this.database.updateRunProgress(runId, progress);
+  }
+
+  deriveProgress(progress) {
+    const elapsedSeconds = Math.max(0, (Date.now() - new Date(progress.startedAt).getTime()) / 1000);
+    let percentComplete = progress.percentComplete || 0;
+
+    if (progress.phase === "queued") {
+      percentComplete = 0;
+    } else if (progress.phase === "starting") {
+      percentComplete = 1;
+    } else if (progress.phase === "connecting") {
+      percentComplete = 3;
+    } else if (progress.phase === "scanning") {
+      if (progress.estimatedTotalFiles > 0) {
+        percentComplete = Math.max(
+          5,
+          Math.min(45, Math.round(5 + (progress.discoveredFiles / progress.estimatedTotalFiles) * 40))
+        );
+      } else {
+        percentComplete = progress.discoveredFiles > 0 ? 12 : 5;
+      }
+    } else if (progress.phase === "comparing" || progress.phase === "downloading") {
+      const totalFiles = Math.max(progress.totalFiles || progress.discoveredFiles || progress.estimatedTotalFiles || 0, 1);
+      percentComplete = Math.max(
+        45,
+        Math.min(96, Math.round(45 + (progress.processedFiles / totalFiles) * 51))
+      );
+    } else if (progress.phase === "finalizing") {
+      percentComplete = 98;
+    }
+
+    progress.percentComplete = percentComplete;
+
+    if (percentComplete > 0 && percentComplete < 100 && elapsedSeconds >= 5) {
+      progress.etaSeconds = Math.max(0, Math.round((elapsedSeconds * (100 - percentComplete)) / percentComplete));
+    } else {
+      progress.etaSeconds = null;
+    }
   }
 
   async scanDirectory(sftp, remoteDir, hooks = {}) {
