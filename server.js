@@ -79,7 +79,8 @@ function parseActivityFilters(searchParams) {
     folder: searchParams.get("folder")?.trim() || "",
     dateFrom: searchParams.get("date_from")?.trim() || "",
     dateTo: searchParams.get("date_to")?.trim() || "",
-    runId: searchParams.get("run_id")?.trim() || ""
+    runId: searchParams.get("run_id")?.trim() || "",
+    intakeDate: searchParams.get("intake_date")?.trim() || ""
   };
 
   if (!["new", "changed", "unchanged", "deleted", ""].includes(filters.status)) {
@@ -102,6 +103,17 @@ function parseActivityFilters(searchParams) {
     } else {
       filters.dateTo = "";
     }
+  }
+
+  const intakeRange = filters.intakeDate
+    ? getLocalDayRange(filters.intakeDate, config.timezone)
+    : getLocalDayRange(new Date(), config.timezone);
+
+  if (intakeRange) {
+    filters.intakeDate = intakeRange.label;
+    filters.intakeRange = intakeRange;
+  } else {
+    filters.intakeDate = "";
   }
 
   const runId = Number.parseInt(filters.runId, 10);
@@ -141,6 +153,10 @@ function buildQueryString(filters) {
     searchParams.set("run_id", String(filters.runId));
   }
 
+  if (filters.intakeDate) {
+    searchParams.set("intake_date", filters.intakeDate);
+  }
+
   return searchParams.toString();
 }
 
@@ -166,16 +182,23 @@ function buildDashboardHtml(requestUrl) {
   const dashboard = database.getDashboardData(filters, {
     activityLimit: config.activityPageSize,
     folderLimit: 50,
-    runLimit: 25
+    runLimit: 25,
+    dailyIntakeRange: filters.intakeRange,
+    dailyIntakeLimit: 20
   });
   const queryString = buildQueryString(filters);
 
-    return renderDashboard({
-      dashboard,
-      config: getPublicConfig(config),
-      serviceState: mirrorService.getState(),
+  return renderDashboard({
+    dashboard,
+    config: getPublicConfig(config),
+    serviceState: mirrorService.getState(),
     flashMessage,
     filters,
+    intake: {
+      date: filters.intakeDate,
+      label: filters.intakeRange ? filters.intakeRange.label : "",
+      totalAdded: (dashboard.dailyFolderIntake || []).reduce((sum, item) => sum + item.added_count, 0)
+    },
     links: {
       activityCsv: `/reports/files.csv${queryString ? `?${queryString}` : ""}`,
       runsCsv: "/reports/runs.csv"

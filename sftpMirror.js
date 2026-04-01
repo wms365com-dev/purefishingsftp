@@ -106,12 +106,14 @@ class SftpMirrorService {
     this.alertManager = options.alertManager || null;
     this.runningPromise = null;
     this.runningContext = null;
+    this.queuedTriggerSource = null;
   }
 
   getState() {
     return {
       running: Boolean(this.runningPromise),
-      currentRun: this.runningContext
+      currentRun: this.runningContext,
+      queuedTriggerSource: this.queuedTriggerSource
     };
   }
 
@@ -140,6 +142,7 @@ class SftpMirrorService {
       lastCompletedPath: "",
       lastCompletedEvent: "",
       lastCompletedAt: null,
+      queuedTriggerSource: this.queuedTriggerSource,
       message: "Queued to start..."
     };
     this.runningPromise = this.runSync(triggerSource, startedAt)
@@ -147,9 +150,36 @@ class SftpMirrorService {
         this.logger.error("Sync failed:", error);
       })
       .finally(() => {
+        const queuedTriggerSource = this.queuedTriggerSource;
+        this.queuedTriggerSource = null;
         this.runningPromise = null;
         this.runningContext = null;
+
+        if (queuedTriggerSource) {
+          this.logger.log(`Starting queued ${queuedTriggerSource} sync after the previous run completed.`);
+          this.startBackgroundSync(queuedTriggerSource);
+        }
       });
+
+    return true;
+  }
+
+  queueBackgroundSync(triggerSource) {
+    if (!this.runningPromise) {
+      return this.startBackgroundSync(triggerSource);
+    }
+
+    if (this.queuedTriggerSource) {
+      return false;
+    }
+
+    this.queuedTriggerSource = triggerSource;
+    if (this.runningContext) {
+      this.runningContext = {
+        ...this.runningContext,
+        queuedTriggerSource: triggerSource
+      };
+    }
 
     return true;
   }
@@ -449,6 +479,7 @@ class SftpMirrorService {
   updateProgress(runId, progress, patch) {
     Object.assign(progress, patch);
     this.deriveProgress(progress);
+    progress.queuedTriggerSource = this.queuedTriggerSource;
     this.runningContext = { ...progress };
     this.database.updateRunProgress(runId, progress);
   }

@@ -1,5 +1,21 @@
 const { getZonedParts, weekdayToIndex } = require("./time");
 
+function getMatchingSlot(now, schedule) {
+  const currentWeekday = weekdayToIndex(now.weekday);
+  if (currentWeekday === undefined) {
+    return null;
+  }
+
+  return schedule.slots.find((slot) => {
+    if (slot.hour !== now.hour || slot.minute !== now.minute) {
+      return false;
+    }
+
+    const targetWeekday = (currentWeekday + (slot.targetWeekdayOffset || 0) + 7) % 7;
+    return schedule.weekdays.includes(targetWeekday);
+  }) || null;
+}
+
 class SyncScheduler {
   constructor(service, config, logger = console, hooks = {}) {
     this.service = service;
@@ -35,18 +51,12 @@ class SyncScheduler {
       this.hooks.onTick(now);
     }
 
-    const weekdayIndex = weekdayToIndex(now.weekday);
-    const isScheduledMinute = now.minute === this.config.schedule.minute;
-    const isScheduledHour =
-      now.hour >= this.config.schedule.startHour &&
-      now.hour <= this.config.schedule.endHour;
-    const isScheduledWeekday = this.config.schedule.weekdays.includes(weekdayIndex);
-
-    if (!isScheduledMinute || !isScheduledHour || !isScheduledWeekday) {
+    const slot = getMatchingSlot(now, this.config.schedule);
+    if (!slot) {
       return;
     }
 
-    const slotKey = `${now.year}-${String(now.month).padStart(2, "0")}-${String(now.day).padStart(2, "0")}T${String(now.hour).padStart(2, "0")}:${String(now.minute).padStart(2, "0")}`;
+    const slotKey = `${now.year}-${String(now.month).padStart(2, "0")}-${String(now.day).padStart(2, "0")}T${String(now.hour).padStart(2, "0")}:${String(now.minute).padStart(2, "0")}|${slot.key}`;
     if (slotKey === this.lastSlotKey) {
       return;
     }
@@ -54,7 +64,15 @@ class SyncScheduler {
     this.lastSlotKey = slotKey;
     const started = this.service.startBackgroundSync("schedule");
     if (!started) {
-      this.logger.log("Skipped scheduled sync because another sync is already running.");
+      const queued = typeof this.service.queueBackgroundSync === "function"
+        ? this.service.queueBackgroundSync("schedule")
+        : false;
+
+      if (queued) {
+        this.logger.log("Queued scheduled sync because another sync is already running.");
+      } else {
+        this.logger.log("Skipped scheduled sync because another sync is already running.");
+      }
     }
   }
 }

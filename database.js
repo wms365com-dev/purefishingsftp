@@ -265,6 +265,21 @@ class MirrorDatabase {
         COALESCE((SELECT MAX(total_file_count) FROM folder_stats), 0) AS tracked_files
     `);
 
+    this.dailyFolderIntakeStmt = this.db.prepare(`
+      SELECT
+        folder_path,
+        COUNT(*) AS added_count,
+        COALESCE(SUM(size), 0) AS added_bytes
+      FROM file_events
+      WHERE
+        event_type = 'new' AND
+        event_at >= ? AND
+        event_at < ?
+      GROUP BY folder_path
+      ORDER BY added_count DESC, folder_path ASC
+      LIMIT ?
+    `);
+
     this.fileEventByIdStmt = this.db.prepare(`
       SELECT
         id,
@@ -411,6 +426,9 @@ class MirrorDatabase {
       summary: this.dashboardSummaryStmt.get(summaryWindowStart, summaryWindowStart),
       recentRuns: this.recentRunsStmt.all(options.runLimit || 20),
       folderStats: this.folderStatsStmt.all(options.folderLimit || 50),
+      dailyFolderIntake: options.dailyIntakeRange
+        ? this.getDailyFolderIntake(options.dailyIntakeRange.startIso, options.dailyIntakeRange.endIso, options.dailyIntakeLimit || 20)
+        : [],
       activitySummary: this.getFileEventSummary(filters),
       fileActivity: this.listFileEvents(filters, limit)
     };
@@ -485,6 +503,10 @@ class MirrorDatabase {
   getTrackedFileEstimate() {
     const row = this.trackedFileEstimateStmt.get();
     return row?.tracked_files || 0;
+  }
+
+  getDailyFolderIntake(startIso, endIso, limit = 20) {
+    return this.dailyFolderIntakeStmt.all(startIso, endIso, limit);
   }
 
   getAlertSummary(startIso, endIso) {

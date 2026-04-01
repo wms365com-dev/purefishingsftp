@@ -213,17 +213,71 @@ function renderActivityCards(rows, timezone) {
   `).join("");
 }
 
-function renderDashboard({ dashboard, config, serviceState, flashMessage, filters, links }) {
+function renderHiddenFilterInputs(filters) {
+  const entries = [
+    ["q", filters.q],
+    ["status", filters.status],
+    ["folder", filters.folder],
+    ["date_from", filters.dateFrom],
+    ["date_to", filters.dateTo],
+    ["run_id", filters.runId]
+  ];
+
+  return entries
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
+    .join("");
+}
+
+function renderDailyIntakeRows(rows) {
+  if (!rows.length) {
+    return `<div class="intake-empty">No new files were added on the selected day.</div>`;
+  }
+
+  const maxAdded = Math.max(...rows.map((entry) => Number(entry.added_count) || 0), 1);
+
+  return rows.map((entry, index) => {
+    const addedCount = Number(entry.added_count) || 0;
+    const addedBytes = Number(entry.added_bytes) || 0;
+    const width = Math.max(10, Math.round((addedCount / maxAdded) * 100));
+
+    return `
+      <article class="intake-row">
+        <div class="intake-rank">${escapeHtml(index + 1)}</div>
+        <div class="intake-main">
+          <div class="intake-topline">
+            <strong>${escapeHtml(entry.folder_path)}</strong>
+            <span class="mobile-chip">${escapeHtml(addedCount)} new</span>
+          </div>
+          <div class="intake-strip" aria-hidden="true"><span style="width:${width}%"></span></div>
+          <div class="intake-foot">
+            <span>${escapeHtml(formatSize(addedBytes))} added</span>
+            <span>${escapeHtml(addedCount)} files for the day</span>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderDashboard({ dashboard, config, serviceState, flashMessage, filters, intake = {}, links }) {
   const summary = dashboard.summary || {};
   const activitySummary = dashboard.activitySummary || {};
+  const dailyFolderIntake = dashboard.dailyFolderIntake || [];
   const statusText = serviceState.running ? "Sync running" : "Idle";
   const currentRun = serviceState.currentRun || null;
   const disableNotice = config.autoSyncEnabled ? "" : `<p class="flash warn">Automatic sync is disabled.</p>`;
   const flash = flashMessage ? `<p class="flash">${escapeHtml(flashMessage)}</p>` : "";
+  const queuedNotice = serviceState.queuedTriggerSource
+    ? `<p class="flash">A ${escapeHtml(serviceState.queuedTriggerSource)} sync is queued and will start as soon as the current run finishes.</p>`
+    : "";
   const retentionLabel = config.snapshotRetentionDays
     ? `${config.snapshotRetentionDays} day(s)`
     : "Disabled";
   const alertsLabel = config.alertsConfigured ? "Configured" : "Not configured";
+  const intakeTotalBytes = dailyFolderIntake.reduce((sum, entry) => sum + (Number(entry.added_bytes) || 0), 0);
+  const intakeLeader = dailyFolderIntake[0] || null;
+  const intakeDateLabel = intake.label || intake.date || "";
 
   const autoRefreshScript = serviceState.running ? `
   <script>
@@ -673,10 +727,130 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       gap: 0.55rem;
     }
 
+    .intake-header {
+      display: grid;
+      gap: 0.9rem;
+      grid-template-columns: 1.1fr 0.9fr;
+      align-items: end;
+    }
+
+    .intake-controls {
+      display: grid;
+      gap: 0.7rem;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+    }
+
+    .intake-summary {
+      margin-top: 1rem;
+    }
+
+    .intake-leader {
+      margin-top: 0.9rem;
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      border: 1px solid rgba(23, 104, 255, 0.12);
+      background:
+        linear-gradient(135deg, rgba(23, 104, 255, 0.08), rgba(31, 157, 104, 0.08)),
+        var(--panel-2);
+      line-height: 1.45;
+    }
+
+    .intake-list {
+      display: grid;
+      gap: 0.8rem;
+      margin-top: 1rem;
+    }
+
+    .intake-row {
+      display: grid;
+      gap: 0.85rem;
+      grid-template-columns: 60px minmax(0, 1fr);
+      align-items: center;
+      padding: 0.9rem;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, #f8fafc);
+    }
+
+    .intake-rank {
+      display: grid;
+      place-items: center;
+      width: 60px;
+      height: 60px;
+      border-radius: 18px;
+      border: 1px solid rgba(23, 104, 255, 0.14);
+      background: radial-gradient(circle at top, rgba(23, 104, 255, 0.18), rgba(23, 104, 255, 0.06));
+      color: var(--brand);
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .intake-main {
+      display: grid;
+      gap: 0.6rem;
+      min-width: 0;
+    }
+
+    .intake-topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+
+    .intake-topline strong {
+      font-size: 1rem;
+      line-height: 1.25;
+      word-break: break-word;
+    }
+
+    .intake-strip {
+      position: relative;
+      height: 18px;
+      border-radius: 999px;
+      overflow: hidden;
+      background:
+        repeating-linear-gradient(
+          90deg,
+          rgba(23, 104, 255, 0.08) 0,
+          rgba(23, 104, 255, 0.08) 18px,
+          rgba(23, 104, 255, 0.04) 18px,
+          rgba(23, 104, 255, 0.04) 24px
+        );
+    }
+
+    .intake-strip span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #1768ff, #4cc0ff 52%, #1f9d68);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    }
+
+    .intake-foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .intake-empty {
+      padding: 1rem;
+      border-radius: 16px;
+      border: 1px dashed var(--line);
+      background: var(--panel-2);
+      color: var(--muted);
+      text-align: center;
+    }
+
     @media (max-width: 1040px) {
       .hero, .section-grid { grid-template-columns: 1fr; }
       .summary-grid, .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form.filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .intake-header { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 760px) {
@@ -773,6 +947,26 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       .mobile-card-stats {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
+
+      .intake-controls {
+        grid-template-columns: 1fr;
+      }
+
+      .intake-row {
+        grid-template-columns: 1fr;
+        padding: 0.8rem;
+      }
+
+      .intake-rank {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        font-size: 1rem;
+      }
+
+      .intake-topline, .intake-foot {
+        flex-direction: column;
+      }
     }
   </style>
 </head>
@@ -807,6 +1001,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         ${liveProgress}
         ${disableNotice}
         ${flash}
+        ${queuedNotice}
         <div class="button-row" style="margin-top:1rem">
           <form method="post" action="/sync">
             <button type="submit"${serviceState.running ? " disabled" : ""}>Run Sync Now</button>
@@ -864,6 +1059,36 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         <div class="summary-card"><span>Changed</span><strong>${escapeHtml(activitySummary.changed || 0)}</strong></div>
         <div class="summary-card"><span>Deleted</span><strong>${escapeHtml(activitySummary.deleted || 0)}</strong></div>
       </div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">Daily Intake</div>
+      <div class="intake-header">
+        <div class="form-copy">
+          <h2>New Files By Folder</h2>
+          <p class="meta">A per-day intake board that shows which folders grew, how many fresh files landed there, and how much data was added.</p>
+        </div>
+        <form class="intake-controls" method="get" action="/">
+          ${renderHiddenFilterInputs(filters)}
+          <label>
+            Selected Day
+            <input type="date" name="intake_date" value="${escapeHtml(intake.date || "")}">
+          </label>
+          <button type="submit">Show Day</button>
+        </form>
+      </div>
+      <div class="summary-grid intake-summary">
+        <div class="summary-card"><span>Selected Day</span><strong>${escapeHtml(intakeDateLabel || "Today")}</strong></div>
+        <div class="summary-card"><span>New Files</span><strong>${escapeHtml(intake.totalAdded || 0)}</strong></div>
+        <div class="summary-card"><span>Active Folders</span><strong>${escapeHtml(dailyFolderIntake.length)}</strong></div>
+        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(intakeTotalBytes))}</strong></div>
+      </div>
+      <div class="intake-leader">
+        ${intakeLeader
+          ? `Top folder for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}: <strong>${escapeHtml(intakeLeader.folder_path)}</strong> with <strong>${escapeHtml(intakeLeader.added_count)} new files</strong> and <strong>${escapeHtml(formatSize(intakeLeader.added_bytes))}</strong> added.`
+          : `No new files were logged for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}.`}
+      </div>
+      <div class="intake-list">${renderDailyIntakeRows(dailyFolderIntake)}</div>
     </section>
 
     <section class="section-grid desktop-only">
@@ -945,4 +1170,3 @@ ${autoRefreshScript}
 module.exports = {
   renderDashboard
 };
-

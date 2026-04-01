@@ -4,7 +4,7 @@ This service connects to an SFTP server, scans the configured remote root, and o
 
 It also includes:
 
-- A built-in scheduler that runs Monday through Friday at `:55` from `8:55 AM` through `4:55 PM` by default.
+- A built-in scheduler that can run Monday through Friday just before each top-of-hour pull window, or on a fixed minute schedule if you prefer the older behavior.
 - A dashboard showing recent sync runs, total file counts by folder, and searchable file activity.
 - Per-file audit history for new, changed, unchanged, and deleted files.
 - CSV exports for file activity and sync runs.
@@ -42,9 +42,9 @@ SFTP_PASSWORD=your-password-here
 REMOTE_ROOT=/
 APP_TIMEZONE=America/New_York
 AUTO_SYNC_ENABLED=true
-SYNC_START_HOUR=8
-SYNC_END_HOUR=16
-SYNC_MINUTE=55
+SYNC_TARGET_START_HOUR=8
+SYNC_TARGET_END_HOUR=17
+SYNC_LEAD_MINUTES=1
 SYNC_WEEKDAYS=MON,TUE,WED,THU,FRI
 ```
 
@@ -57,10 +57,14 @@ Optional general settings:
 - `SFTP_PASSPHRASE=`
 - `APP_TIMEZONE=America/New_York`
 - `AUTO_SYNC_ENABLED=true`
+- `SYNC_TARGET_START_HOUR=8`
+- `SYNC_TARGET_END_HOUR=17`
+- `SYNC_LEAD_MINUTES=1`
+- `SYNC_WEEKDAYS=MON,TUE,WED,THU,FRI`
+- Legacy fixed-minute schedule:
 - `SYNC_START_HOUR=8`
 - `SYNC_END_HOUR=16`
 - `SYNC_MINUTE=55`
-- `SYNC_WEEKDAYS=MON,TUE,WED,THU,FRI`
 - `ACTIVITY_PAGE_SIZE=50`
 - `SNAPSHOT_RETENTION_DAYS=0`
 
@@ -135,8 +139,9 @@ Then open `http://localhost:3000`.
 
 ## Notes
 
-- The default schedule is inclusive, so it runs at `8:55`, `9:55`, ..., `16:55` Monday through Friday in the configured timezone.
+- For top-of-hour capture windows, set `SYNC_TARGET_START_HOUR`, `SYNC_TARGET_END_HOUR`, and `SYNC_LEAD_MINUTES`. Example: `8`, `17`, and `1` runs at `7:59`, `8:59`, ..., `16:59` to capture the `8:00 AM` through `5:00 PM` hourly boundary.
+- If a scheduled slot happens while a sync is still running, the service now queues one follow-up scheduled sync to start immediately after the current run completes.
+- If you prefer the older fixed-minute pattern, omit the `SYNC_TARGET_*` variables and use `SYNC_START_HOUR`, `SYNC_END_HOUR`, and `SYNC_MINUTE`.
 - Remote deletions are logged into the audit trail and removed from the current tracked set.
 - Retention cleanup is disabled by default until you set `SNAPSHOT_RETENTION_DAYS`.
 - Alert delivery is optional; if no webhook or SMTP settings are configured, the app still syncs and logs normally.
-

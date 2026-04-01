@@ -5,6 +5,15 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseBoundedNumber(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, minimum), maximum);
+}
+
 function parseBoolean(value, fallback) {
   if (value === undefined) {
     return fallback;
@@ -101,6 +110,109 @@ function formatWeekdays(weekdays) {
   return weekdays.map((day) => labels[day]).join(", ");
 }
 
+function buildLegacySchedule(weekdays) {
+  let startHour = parseBoundedNumber(process.env.SYNC_START_HOUR, 8, 0, 23);
+  let endHour = parseBoundedNumber(process.env.SYNC_END_HOUR, 16, 0, 23);
+  const minute = parseBoundedNumber(process.env.SYNC_MINUTE, 55, 0, 59);
+
+  if (endHour < startHour) {
+    [startHour, endHour] = [endHour, startHour];
+  }
+
+  const slots = [];
+  for (let hour = startHour; hour <= endHour; hour += 1) {
+    slots.push({
+      hour,
+      minute,
+      targetHour: hour,
+      targetMinute: minute,
+      targetWeekdayOffset: 0,
+      key: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+    });
+  }
+
+  return {
+    mode: "legacy",
+    weekdays,
+    startHour,
+    endHour,
+    minute,
+    slots
+  };
+}
+
+function buildPreHourSchedule(weekdays) {
+  const hasPreHourSettings =
+    process.env.SYNC_TARGET_START_HOUR !== undefined ||
+    process.env.SYNC_TARGET_END_HOUR !== undefined ||
+    process.env.SYNC_LEAD_MINUTES !== undefined;
+
+  if (!hasPreHourSettings) {
+    return null;
+  }
+
+  let targetStartHour = parseBoundedNumber(process.env.SYNC_TARGET_START_HOUR, 8, 0, 23);
+  let targetEndHour = parseBoundedNumber(process.env.SYNC_TARGET_END_HOUR, 17, 0, 23);
+  const leadMinutes = parseBoundedNumber(process.env.SYNC_LEAD_MINUTES, 1, 0, 59);
+
+  if (targetEndHour < targetStartHour) {
+    [targetStartHour, targetEndHour] = [targetEndHour, targetStartHour];
+  }
+
+  const slots = [];
+  for (let targetHour = targetStartHour; targetHour <= targetEndHour; targetHour += 1) {
+    const targetTotalMinutes = targetHour * 60;
+    const triggerTotalMinutes = targetTotalMinutes - leadMinutes;
+    const dayShift = Math.floor(triggerTotalMinutes / (24 * 60));
+    const normalizedMinutes = ((triggerTotalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+    const hour = Math.floor(normalizedMinutes / 60);
+    const minute = normalizedMinutes % 60;
+
+    slots.push({
+      hour,
+      minute,
+      targetHour,
+      targetMinute: 0,
+      targetWeekdayOffset: -dayShift,
+      key: `${String(targetHour).padStart(2, "0")}:00-minus-${String(leadMinutes).padStart(2, "0")}`
+    });
+  }
+
+  return {
+    mode: "pre_hour",
+    weekdays,
+    targetStartHour,
+    targetEndHour,
+    targetMinute: 0,
+    leadMinutes,
+    startHour: slots[0]?.hour ?? targetStartHour,
+    endHour: slots[slots.length - 1]?.hour ?? targetEndHour,
+    minute: slots[0]?.minute ?? 0,
+    slots
+  };
+}
+
+function resolveSchedule() {
+  const weekdays = parseWeekdays(process.env.SYNC_WEEKDAYS);
+  return buildPreHourSchedule(weekdays) || buildLegacySchedule(weekdays);
+}
+
+function formatSchedule(schedule) {
+  const weekdaysLabel = formatWeekdays(schedule.weekdays);
+
+  if (schedule.mode === "pre_hour") {
+    const firstSlot = schedule.slots[0];
+    const lastSlot = schedule.slots[schedule.slots.length - 1];
+    const leadLabel = schedule.leadMinutes === 1
+      ? "1 minute"
+      : `${schedule.leadMinutes} minutes`;
+
+    return `Runs ${weekdaysLabel} ${leadLabel} before each top-of-hour check from ${formatTime(schedule.targetStartHour, 0)} through ${formatTime(schedule.targetEndHour, 0)} (${formatTime(firstSlot.hour, firstSlot.minute)} through ${formatTime(lastSlot.hour, lastSlot.minute)})`;
+  }
+
+  return `Runs ${weekdaysLabel} at :${String(schedule.minute).padStart(2, "0")} from ${formatTime(schedule.startHour, schedule.minute)} through ${formatTime(schedule.endHour, schedule.minute)}`;
+}
+
 function loadConfig() {
   const dataRoot = path.resolve(process.env.DATA_ROOT || path.join(process.cwd(), "data"));
 
@@ -113,12 +225,7 @@ function loadConfig() {
     autoSyncEnabled: parseBoolean(process.env.AUTO_SYNC_ENABLED, true),
     activityPageSize: Math.min(Math.max(parseNumber(process.env.ACTIVITY_PAGE_SIZE, 50), 10), 250),
     snapshotRetentionDays: Math.max(parseNumber(process.env.SNAPSHOT_RETENTION_DAYS, 0), 0),
-    schedule: {
-      startHour: parseNumber(process.env.SYNC_START_HOUR, 8),
-      endHour: parseNumber(process.env.SYNC_END_HOUR, 16),
-      minute: parseNumber(process.env.SYNC_MINUTE, 55),
-      weekdays: parseWeekdays(process.env.SYNC_WEEKDAYS)
-    },
+    schedule: resolveSchedule(),
     alerts: {
       webhookUrl: process.env.ALERT_WEBHOOK_URL || "",
       emailTo: parseList(process.env.ALERT_EMAIL_TO),
@@ -175,7 +282,7 @@ function getPublicConfig(config) {
   return {
     remoteRoot: config.sftp.remoteRoot,
     timezone: config.timezone,
-    schedule: `Runs ${formatWeekdays(config.schedule.weekdays)} at :${String(config.schedule.minute).padStart(2, "0")} from ${formatTime(config.schedule.startHour, config.schedule.minute)} through ${formatTime(config.schedule.endHour, config.schedule.minute)}`,
+    schedule: formatSchedule(config.schedule),
     autoSyncEnabled: config.autoSyncEnabled,
     activityPageSize: config.activityPageSize,
     snapshotRetentionDays: config.snapshotRetentionDays,
