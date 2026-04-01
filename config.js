@@ -78,7 +78,10 @@ function normalizeRemoteRoot(remoteRoot) {
     return "/";
   }
 
-  let normalized = remoteRoot.replace(/\\/g, "/");
+  let normalized = String(remoteRoot).trim();
+  normalized = normalized.replace(/^REMOTE_ROOT\s*=\s*/i, "");
+  normalized = normalized.replace(/^['"]|['"]$/g, "");
+  normalized = normalized.replace(/\\/g, "/");
   if (!normalized.startsWith("/")) {
     normalized = `/${normalized}`;
   }
