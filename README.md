@@ -1,0 +1,142 @@
+# PureFishing SFTP Mirror
+
+This service connects to an SFTP server, scans the configured remote root, and only downloads files that are new or have changed since the last successful sync. Downloaded files are stored in timestamped snapshot folders while preserving the SFTP folder structure beneath the configured remote root.
+
+It also includes:
+
+- A built-in scheduler that runs Monday through Friday at `:55` from `8:55 AM` through `4:55 PM` by default.
+- A dashboard showing recent sync runs, total file counts by folder, and searchable file activity.
+- Per-file audit history for new, changed, unchanged, and deleted files.
+- CSV exports for file activity and sync runs.
+- Optional webhook and SMTP email alerts for failures, activity, and daily summaries.
+- SHA-256 checksums for archived files.
+- Optional snapshot retention cleanup.
+
+## Railway setup
+
+1. Create a Railway service from this project.
+2. Attach a persistent volume and set `DATA_ROOT=/data`.
+3. Add the environment variables below.
+4. Set the healthcheck path to `/health`.
+5. Deploy.
+
+## Environment variables
+
+Required:
+
+- `SFTP_HOST`
+- `SFTP_USERNAME`
+- One of:
+  - `SFTP_PASSWORD`
+  - `SFTP_PRIVATE_KEY`
+  - `SFTP_PRIVATE_KEY_BASE64`
+
+Recommended for your current schedule:
+
+```env
+DATA_ROOT=/data
+SFTP_HOST=sftp.purefishing.com
+SFTP_PORT=22
+SFTP_USERNAME=BlueDog
+SFTP_PASSWORD=your-password-here
+REMOTE_ROOT=/
+APP_TIMEZONE=America/New_York
+AUTO_SYNC_ENABLED=true
+SYNC_START_HOUR=8
+SYNC_END_HOUR=16
+SYNC_MINUTE=55
+SYNC_WEEKDAYS=MON,TUE,WED,THU,FRI
+```
+
+Optional general settings:
+
+- `PORT=3000`
+- `DATA_ROOT=./data`
+- `REMOTE_ROOT=/`
+- `SFTP_PORT=22`
+- `SFTP_PASSPHRASE=`
+- `APP_TIMEZONE=America/New_York`
+- `AUTO_SYNC_ENABLED=true`
+- `SYNC_START_HOUR=8`
+- `SYNC_END_HOUR=16`
+- `SYNC_MINUTE=55`
+- `SYNC_WEEKDAYS=MON,TUE,WED,THU,FRI`
+- `ACTIVITY_PAGE_SIZE=50`
+- `SNAPSHOT_RETENTION_DAYS=0`
+
+Optional alert settings:
+
+- `ALERT_WEBHOOK_URL=`
+- `ALERT_EMAIL_TO=ops@example.com,team@example.com`
+- `ALERT_EMAIL_FROM=mirror@example.com`
+- `SMTP_HOST=`
+- `SMTP_PORT=587`
+- `SMTP_SECURE=false`
+- `SMTP_USERNAME=`
+- `SMTP_PASSWORD=`
+- `DAILY_SUMMARY_ENABLED=true`
+- `DAILY_SUMMARY_HOUR=17`
+- `DAILY_SUMMARY_MINUTE=5`
+- `DAILY_SUMMARY_SEND_WHEN_EMPTY=false`
+
+## Dashboard and reports
+
+The dashboard includes:
+
+- `Run Sync Now` manual trigger.
+- Recent sync runs with changed, deleted, and downloaded counts.
+- Total file counts by folder.
+- Search filters for file/path, status, folder, run id, and date range.
+- Direct download links for archived files when a snapshot exists.
+- `Export Activity CSV` for filtered file history.
+- `Export Runs CSV` for sync run summaries.
+
+## Storage layout
+
+Successful syncs create snapshot folders under:
+
+```text
+DATA_ROOT/
+  mirror.db
+  snapshots/
+    2026/
+      03/
+        31/
+          205500/
+            ...
+```
+
+Only new or changed files are written into each timestamped snapshot folder. If a run finds no new or changed files, it records the scan and file history in SQLite but does not create a new snapshot directory.
+
+## Backup and restore
+
+To preserve history and archived files, back up both:
+
+- `DATA_ROOT/mirror.db`
+- `DATA_ROOT/snapshots/`
+
+If you ever need to restore, place both back into the same `DATA_ROOT` location before starting the app.
+
+## Private key formats
+
+You can provide either:
+
+- `SFTP_PRIVATE_KEY` with newline characters escaped as `\n`
+- `SFTP_PRIVATE_KEY_BASE64` containing the full PEM file contents encoded in base64
+
+## Local run
+
+```bash
+npm install
+npm start
+```
+
+Then open `http://localhost:3000`.
+
+## Notes
+
+- The default schedule is inclusive, so it runs at `8:55`, `9:55`, ..., `16:55` Monday through Friday in the configured timezone.
+- Remote deletions are logged into the audit trail and removed from the current tracked set.
+- Retention cleanup is disabled by default until you set `SNAPSHOT_RETENTION_DAYS`.
+- Alert delivery is optional; if no webhook or SMTP settings are configured, the app still syncs and logs normally.
+

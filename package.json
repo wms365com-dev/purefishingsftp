@@ -1,0 +1,18 @@
+{
+  "name": "purefishing-sftp-mirror",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Railway-friendly SFTP mirror with timestamped snapshots and a dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check alerting.js && node --check config.js && node --check database.js && node --check renderDashboard.js && node --check scheduler.js && node --check sftpMirror.js && node --check time.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "nodemailer": "^7.0.3",
+    "ssh2-sftp-client": "^11.0.0"
+  }
+}
