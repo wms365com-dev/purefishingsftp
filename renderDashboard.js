@@ -116,12 +116,25 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const summary = dashboard.summary || {};
   const activitySummary = dashboard.activitySummary || {};
   const statusText = serviceState.running ? "Sync running" : "Idle";
+  const currentRun = serviceState.currentRun || null;
   const disableNotice = config.autoSyncEnabled ? "" : `<p class="flash warn">Automatic sync is disabled.</p>`;
   const flash = flashMessage ? `<p class="flash">${escapeHtml(flashMessage)}</p>` : "";
   const retentionLabel = config.snapshotRetentionDays
     ? `${config.snapshotRetentionDays} day(s)`
     : "Disabled";
   const alertsLabel = config.alertsConfigured ? "Configured" : "Not configured";
+  const liveProgress = currentRun ? `
+    <div class="stats" style="margin-top:18px">
+      <div class="stat"><div class="label">Phase</div><div class="value">${escapeHtml(currentRun.phase || "running")}</div></div>
+      <div class="stat"><div class="label">Discovered</div><div class="value">${escapeHtml(currentRun.discoveredFiles || 0)}</div></div>
+      <div class="stat"><div class="label">Downloaded</div><div class="value">${escapeHtml(currentRun.downloadedFiles || 0)}</div></div>
+    </div>
+    <div class="detail" style="margin-top:14px">
+      <div><strong>Started:</strong> ${escapeHtml(formatDateTime(currentRun.startedAt, config.timezone))}</div>
+      <div><strong>Current path:</strong> ${escapeHtml(currentRun.currentPath || "-")}</div>
+      <div><strong>Live message:</strong> ${escapeHtml(currentRun.message || "-")}</div>
+    </div>
+  ` : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -189,6 +202,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <div><strong>Snapshot retention:</strong> ${escapeHtml(retentionLabel)}</div>
           <div><strong>Activity page size:</strong> ${escapeHtml(config.activityPageSize)}</div>
         </div>
+        ${liveProgress}
         ${disableNotice}
         ${flash}
         <div class="button-row" style="margin-top:16px">
@@ -291,4 +305,3 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
 module.exports = {
   renderDashboard
 };
-

@@ -108,6 +108,28 @@ class MirrorDatabase {
       WHERE id = ?
     `);
 
+    this.updateRunProgressStmt = this.db.prepare(`
+      UPDATE sync_runs
+      SET
+        status = 'running',
+        discovered_files = ?,
+        new_files = ?,
+        changed_files = ?,
+        deleted_files = ?,
+        downloaded_files = ?,
+        message = ?
+      WHERE id = ?
+    `);
+
+    this.failRunningRunsStmt = this.db.prepare(`
+      UPDATE sync_runs
+      SET
+        finished_at = ?,
+        status = 'failed',
+        message = ?
+      WHERE status = 'running'
+    `);
+
     this.selectKnownFilesStmt = this.db.prepare(`
       SELECT
         remote_path,
@@ -275,6 +297,22 @@ class MirrorDatabase {
       details.message,
       runId
     );
+  }
+
+  updateRunProgress(runId, details) {
+    this.updateRunProgressStmt.run(
+      details.discoveredFiles,
+      details.newFiles,
+      details.changedFiles,
+      details.deletedFiles,
+      details.downloadedFiles,
+      details.message,
+      runId
+    );
+  }
+
+  failRunningRuns(finishedAt, message) {
+    this.failRunningRunsStmt.run(finishedAt, message);
   }
 
   getKnownFilesMap() {
@@ -533,4 +571,3 @@ class MirrorDatabase {
 module.exports = {
   MirrorDatabase
 };
-

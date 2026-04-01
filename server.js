@@ -19,6 +19,7 @@ fs.mkdirSync(config.dataRoot, { recursive: true });
 fs.mkdirSync(config.snapshotsRoot, { recursive: true });
 
 const database = new MirrorDatabase(config.databasePath);
+database.failRunningRuns(new Date().toISOString(), "Run interrupted before completion. The service restarted or the process exited unexpectedly.");
 const alertManager = new AlertManager(config, database);
 const mirrorService = new SftpMirrorService(config, database, console, { alertManager });
 const scheduler = new SyncScheduler(mirrorService, config, console, {
@@ -169,10 +170,10 @@ function buildDashboardHtml(requestUrl) {
   });
   const queryString = buildQueryString(filters);
 
-  return renderDashboard({
-    dashboard,
-    config: getPublicConfig(config),
-    serviceState: mirrorService.getState(),
+    return renderDashboard({
+      dashboard,
+      config: getPublicConfig(config),
+      serviceState: mirrorService.getState(),
     flashMessage,
     filters,
     links: {
@@ -328,4 +329,3 @@ function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-

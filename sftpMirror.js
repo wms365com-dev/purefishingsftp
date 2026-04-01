@@ -102,7 +102,18 @@ class SftpMirrorService {
     }
 
     const startedAt = toIsoString();
-    this.runningContext = { triggerSource, startedAt };
+    this.runningContext = {
+      triggerSource,
+      startedAt,
+      phase: "queued",
+      currentPath: "",
+      discoveredFiles: 0,
+      newFiles: 0,
+      changedFiles: 0,
+      deletedFiles: 0,
+      downloadedFiles: 0,
+      message: "Queued to start..."
+    };
     this.runningPromise = this.runSync(triggerSource, startedAt)
       .catch((error) => {
         this.logger.error("Sync failed:", error);
@@ -119,10 +130,48 @@ class SftpMirrorService {
     const runId = this.database.createRun(triggerSource, startedAt);
     const sftp = new SftpClient("purefishing-sftp-mirror");
     let runResult = null;
+    const progress = {
+      runId,
+      triggerSource,
+      startedAt,
+      phase: "starting",
+      currentPath: "",
+      discoveredFiles: 0,
+      newFiles: 0,
+      changedFiles: 0,
+      deletedFiles: 0,
+      downloadedFiles: 0,
+      message: "Preparing sync..."
+    };
 
     try {
+      this.updateProgress(runId, progress, {
+        phase: "connecting",
+        message: `Connecting to ${this.config.sftp.host}:${this.config.sftp.port}...`
+      });
       await sftp.connect(this.buildConnectionOptions());
-      const discovered = await this.scanDirectory(sftp, this.config.sftp.remoteRoot);
+      this.updateProgress(runId, progress, {
+        phase: "scanning",
+        currentPath: this.config.sftp.remoteRoot,
+        message: `Scanning ${this.config.sftp.remoteRoot}...`
+      });
+      const discovered = await this.scanDirectory(sftp, this.config.sftp.remoteRoot, {
+        onDirectory: (remotePath) => {
+          this.updateProgress(runId, progress, {
+            phase: "scanning",
+            currentPath: remotePath,
+            message: `Scanning ${remotePath}...`
+          });
+        },
+        onFile: () => {
+          this.updateProgress(runId, progress, {
+            discoveredFiles: progress.discoveredFiles + 1,
+            message: progress.currentPath
+              ? `Scanning ${progress.currentPath}... ${progress.discoveredFiles + 1} file(s) discovered`
+              : `Scanning... ${progress.discoveredFiles + 1} file(s) discovered`
+          });
+        }
+      });
       const knownFiles = this.database.getKnownFilesMap();
       const discoveredPaths = new Set(discovered.files.map((file) => file.remotePath));
       const deletedFiles = [];
@@ -142,10 +191,13 @@ class SftpMirrorService {
         }
       }
 
+      this.updateProgress(runId, progress, {
+        phase: "comparing",
+        deletedFiles: deletedFiles.length,
+        message: `Scan complete. ${discovered.files.length} file(s) discovered, ${deletedFiles.length} deletion(s) detected.`
+      });
+
       let snapshotDir = null;
-      let newFiles = 0;
-      let changedFiles = 0;
-      let downloadedFiles = 0;
 
       for (const file of discovered.files) {
         const existing = knownFiles.get(file.remotePath);
@@ -159,11 +211,15 @@ class SftpMirrorService {
         if (!existing) {
           file.eventType = "new";
           file.eventMessage = "File discovered for the first time.";
-          newFiles += 1;
+          this.updateProgress(runId, progress, {
+            newFiles: progress.newFiles + 1
+          });
         } else if (changed) {
           file.eventType = "changed";
           file.eventMessage = "File content or metadata changed on the source SFTP.";
-          changedFiles += 1;
+          this.updateProgress(runId, progress, {
+            changedFiles: progress.changedFiles + 1
+          });
         } else {
           file.eventType = "unchanged";
           file.eventMessage = "File unchanged since the previous successful scan.";
@@ -181,14 +237,26 @@ class SftpMirrorService {
 
         const relativePath = relativeRemotePath(this.config.sftp.remoteRoot, file.remotePath);
         const localPath = path.join(snapshotDir, ...relativePath.split("/").filter(Boolean));
+        this.updateProgress(runId, progress, {
+          phase: "downloading",
+          currentPath: file.remotePath,
+          message: `Downloading ${file.remotePath}...`
+        });
         await fsPromises.mkdir(path.dirname(localPath), { recursive: true });
         await sftp.get(file.remotePath, localPath);
         file.downloaded = true;
         file.eventSnapshotPath = localPath;
         file.checksum = await hashFile(localPath);
-        downloadedFiles += 1;
+        this.updateProgress(runId, progress, {
+          downloadedFiles: progress.downloadedFiles + 1,
+          message: `Downloaded ${progress.downloadedFiles + 1} file(s). Latest: ${file.remotePath}`
+        });
       }
 
+      this.updateProgress(runId, progress, {
+        phase: "finalizing",
+        message: "Writing audit history and finishing the sync..."
+      });
       this.database.applySuccessfulScan(runId, discovered, deletedFiles, finishedAt);
       const retention = await this.pruneSnapshots();
       runResult = {
@@ -198,12 +266,12 @@ class SftpMirrorService {
         finishedAt,
         status: "success",
         discoveredFiles: discovered.files.length,
-        newFiles,
-        changedFiles,
+        newFiles: progress.newFiles,
+        changedFiles: progress.changedFiles,
         deletedFiles: deletedFiles.length,
-        downloadedFiles,
+        downloadedFiles: progress.downloadedFiles,
         snapshotDir,
-        message: this.buildRunMessage(downloadedFiles, deletedFiles.length, retention.prunedSnapshotFolders),
+        message: this.buildRunMessage(progress.downloadedFiles, deletedFiles.length, retention.prunedSnapshotFolders),
         retention
       };
 
@@ -324,8 +392,18 @@ class SftpMirrorService {
     return { prunedSnapshotFolders };
   }
 
-  async scanDirectory(sftp, remoteDir) {
+  updateProgress(runId, progress, patch) {
+    Object.assign(progress, patch);
+    this.runningContext = { ...progress };
+    this.database.updateRunProgress(runId, progress);
+  }
+
+  async scanDirectory(sftp, remoteDir, hooks = {}) {
     const normalizedRemoteDir = normalizeRemotePath(remoteDir);
+    if (typeof hooks.onDirectory === "function") {
+      hooks.onDirectory(normalizedRemoteDir);
+    }
+
     const entries = await sftp.list(normalizedRemoteDir);
     const files = [];
     const folderStats = [];
@@ -335,12 +413,18 @@ class SftpMirrorService {
     for (const entry of entries) {
       const entryPath = joinRemote(normalizedRemoteDir, entry.name);
 
-      if (entry.type === "d") {
-        const nested = await this.scanDirectory(sftp, entryPath);
-        files.push(...nested.files);
-        folderStats.push(...nested.folderStats);
-        totalFileCount += nested.totalFileCount;
-        continue;
+      if (entry.type === "d" || entry.type === "l") {
+        try {
+          const nested = await this.scanDirectory(sftp, entryPath, hooks);
+          files.push(...nested.files);
+          folderStats.push(...nested.folderStats);
+          totalFileCount += nested.totalFileCount;
+          continue;
+        } catch (error) {
+          if (entry.type === "d") {
+            throw error;
+          }
+        }
       }
 
       if (entry.type !== "-") {
@@ -349,6 +433,9 @@ class SftpMirrorService {
 
       directFileCount += 1;
       totalFileCount += 1;
+      if (typeof hooks.onFile === "function") {
+        hooks.onFile(entryPath);
+      }
       files.push({
         remotePath: entryPath,
         fileName: entry.name,
@@ -383,4 +470,3 @@ class SftpMirrorService {
 module.exports = {
   SftpMirrorService
 };
-
