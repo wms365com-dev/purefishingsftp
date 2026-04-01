@@ -96,11 +96,51 @@ class MirrorDatabase {
         FOREIGN KEY (run_id) REFERENCES sync_runs(id)
       );
 
+      CREATE TABLE IF NOT EXISTS xml_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_event_id INTEGER,
+        run_id INTEGER NOT NULL,
+        folder_path TEXT NOT NULL,
+        remote_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        snapshot_path TEXT NOT NULL UNIQUE,
+        document_type TEXT,
+        record_key TEXT,
+        order_number TEXT,
+        order_date TEXT,
+        ship_to TEXT,
+        customer_name TEXT,
+        item_count INTEGER NOT NULL DEFAULT 0,
+        total_qty REAL NOT NULL DEFAULT 0,
+        item_preview TEXT,
+        parse_status TEXT NOT NULL,
+        parse_message TEXT,
+        parsed_at TEXT NOT NULL,
+        FOREIGN KEY (file_event_id) REFERENCES file_events(id),
+        FOREIGN KEY (run_id) REFERENCES sync_runs(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS xml_document_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id INTEGER NOT NULL,
+        line_number INTEGER NOT NULL DEFAULT 0,
+        item_code TEXT,
+        description TEXT,
+        quantity_value REAL,
+        quantity_text TEXT,
+        uom TEXT,
+        FOREIGN KEY (document_id) REFERENCES xml_documents(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_file_events_event_at ON file_events(event_at DESC);
       CREATE INDEX IF NOT EXISTS idx_file_events_event_type ON file_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_file_events_folder_path ON file_events(folder_path);
       CREATE INDEX IF NOT EXISTS idx_file_events_remote_path ON file_events(remote_path);
       CREATE INDEX IF NOT EXISTS idx_file_events_run_id ON file_events(run_id);
+      CREATE INDEX IF NOT EXISTS idx_xml_documents_folder_path ON xml_documents(folder_path);
+      CREATE INDEX IF NOT EXISTS idx_xml_documents_parsed_at ON xml_documents(parsed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_xml_documents_parse_status ON xml_documents(parse_status);
+      CREATE INDEX IF NOT EXISTS idx_xml_document_items_document_id ON xml_document_items(document_id);
     `);
 
     this.ensureColumn("known_files", "file_name", "TEXT NOT NULL DEFAULT ''");
@@ -340,6 +380,129 @@ class MirrorDatabase {
       ORDER BY event_at ASC, id ASC
     `);
 
+    this.fileEventIdBySnapshotPathStmt = this.db.prepare(`
+      SELECT id
+      FROM file_events
+      WHERE snapshot_path = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `);
+
+    this.upsertXmlDocumentStmt = this.db.prepare(`
+      INSERT INTO xml_documents (
+        file_event_id,
+        run_id,
+        folder_path,
+        remote_path,
+        file_name,
+        snapshot_path,
+        document_type,
+        record_key,
+        order_number,
+        order_date,
+        ship_to,
+        customer_name,
+        item_count,
+        total_qty,
+        item_preview,
+        parse_status,
+        parse_message,
+        parsed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(snapshot_path) DO UPDATE SET
+        file_event_id = excluded.file_event_id,
+        run_id = excluded.run_id,
+        folder_path = excluded.folder_path,
+        remote_path = excluded.remote_path,
+        file_name = excluded.file_name,
+        document_type = excluded.document_type,
+        record_key = excluded.record_key,
+        order_number = excluded.order_number,
+        order_date = excluded.order_date,
+        ship_to = excluded.ship_to,
+        customer_name = excluded.customer_name,
+        item_count = excluded.item_count,
+        total_qty = excluded.total_qty,
+        item_preview = excluded.item_preview,
+        parse_status = excluded.parse_status,
+        parse_message = excluded.parse_message,
+        parsed_at = excluded.parsed_at
+      RETURNING id
+    `);
+
+    this.deleteXmlDocumentItemsStmt = this.db.prepare(`
+      DELETE FROM xml_document_items
+      WHERE document_id = ?
+    `);
+
+    this.insertXmlDocumentItemStmt = this.db.prepare(`
+      INSERT INTO xml_document_items (
+        document_id,
+        line_number,
+        item_code,
+        description,
+        quantity_value,
+        quantity_text,
+        uom
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.xmlFolderTabsStmt = this.db.prepare(`
+      SELECT
+        folder_path,
+        COUNT(*) AS total_documents,
+        MAX(parsed_at) AS last_parsed_at,
+        COALESCE(SUM(item_count), 0) AS total_items,
+        COALESCE(SUM(total_qty), 0) AS total_qty
+      FROM xml_documents
+      WHERE parse_status = 'success'
+      GROUP BY folder_path
+      ORDER BY last_parsed_at DESC, folder_path ASC
+      LIMIT ?
+    `);
+
+    this.xmlDocumentsByFolderStmt = this.db.prepare(`
+      SELECT
+        id,
+        file_event_id,
+        run_id,
+        folder_path,
+        remote_path,
+        file_name,
+        snapshot_path,
+        document_type,
+        record_key,
+        order_number,
+        order_date,
+        ship_to,
+        customer_name,
+        item_count,
+        total_qty,
+        item_preview,
+        parse_status,
+        parse_message,
+        parsed_at
+      FROM xml_documents
+      WHERE folder_path = ?
+      ORDER BY parsed_at DESC, id DESC
+      LIMIT ?
+    `);
+
+    this.xmlDocumentItemsStmt = this.db.prepare(`
+      SELECT
+        id,
+        document_id,
+        line_number,
+        item_code,
+        description,
+        quantity_value,
+        quantity_text,
+        uom
+      FROM xml_document_items
+      WHERE document_id = ?
+      ORDER BY line_number ASC, id ASC
+    `);
+
     this.fileEventByIdStmt = this.db.prepare(`
       SELECT
         id,
@@ -489,6 +652,7 @@ class MirrorDatabase {
       dailyFolderIntake: options.dailyIntakeRange
         ? this.getDailyFolderIntake(options.dailyIntakeRange.startIso, options.dailyIntakeRange.endIso, options.dailyIntakeLimit || 20)
         : [],
+      xmlFolderTabs: this.getXmlFolderTabs(options.xmlFolderLimit || 8, options.xmlDocumentLimit || 15),
       asnHourlyReport: options.asnHourlyRange && options.asnReportFolder && options.timezone
         ? this.getHourlyFolderIntake(options.asnReportFolder, options.asnHourlyRange.startIso, options.asnHourlyRange.endIso, options.timezone)
         : null,
@@ -564,6 +728,58 @@ class MirrorDatabase {
 
   getFileEventById(id) {
     return this.fileEventByIdStmt.get(id);
+  }
+
+  getFileEventIdBySnapshotPath(snapshotPath) {
+    return this.fileEventIdBySnapshotPathStmt.get(snapshotPath)?.id || null;
+  }
+
+  upsertXmlDocument(document) {
+    this.db.exec("BEGIN");
+
+    try {
+      const row = this.upsertXmlDocumentStmt.get(
+        document.fileEventId,
+        document.runId,
+        document.folderPath,
+        document.remotePath,
+        document.fileName,
+        document.snapshotPath,
+        document.documentType,
+        document.recordKey,
+        document.orderNumber,
+        document.orderDate,
+        document.shipTo,
+        document.customerName,
+        document.itemCount,
+        document.totalQty,
+        document.itemPreview,
+        document.parseStatus,
+        document.parseMessage,
+        document.parsedAt
+      );
+
+      const documentId = row.id;
+      this.deleteXmlDocumentItemsStmt.run(documentId);
+
+      for (const item of document.items || []) {
+        this.insertXmlDocumentItemStmt.run(
+          documentId,
+          item.lineNumber,
+          item.itemCode || null,
+          item.description || null,
+          item.quantityValue,
+          item.quantityText || null,
+          item.uom || null
+        );
+      }
+
+      this.db.exec("COMMIT");
+      return documentId;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   getTrackedFileEstimate() {
@@ -698,6 +914,18 @@ class MirrorDatabase {
         peakDayCount: peakDay?.totalAdded || 0
       }
     };
+  }
+
+  getXmlFolderTabs(folderLimit = 8, documentLimit = 15) {
+    const folders = this.xmlFolderTabsStmt.all(folderLimit);
+    return folders.map((folder, index) => ({
+      ...folder,
+      tab_id: `folder-tab-${index + 1}`,
+      documents: this.xmlDocumentsByFolderStmt.all(folder.folder_path, documentLimit).map((document) => ({
+        ...document,
+        items: this.xmlDocumentItemsStmt.all(document.id)
+      }))
+    }));
   }
 
   getAlertSummary(startIso, endIso) {

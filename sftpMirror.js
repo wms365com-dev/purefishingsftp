@@ -4,6 +4,7 @@ const fsPromises = require("node:fs/promises");
 const path = require("node:path");
 const pathPosix = require("node:path/posix");
 const SftpClient = require("ssh2-sftp-client");
+const { parseXmlSnapshot } = require("./xmlProcessor");
 
 function toIsoString(date = new Date()) {
   return date.toISOString();
@@ -64,6 +65,15 @@ function hashFile(filePath) {
     stream.on("error", reject);
     stream.on("end", () => resolve(hash.digest("hex")));
   });
+}
+
+function isXmlSnapshotCandidate(file) {
+  return Boolean(
+    file &&
+    file.downloaded &&
+    file.eventSnapshotPath &&
+    /\.xml$/i.test(file.fileName || "")
+  );
 }
 
 async function listDirectories(rootPath) {
@@ -341,6 +351,7 @@ class SftpMirrorService {
         message: "Writing audit history and finishing the sync..."
       });
       this.database.applySuccessfulScan(runId, discovered, deletedFiles, finishedAt);
+      await this.processXmlSnapshots(runId, discovered.files, progress);
       const retention = await this.pruneSnapshots();
       runResult = {
         runId,
@@ -484,6 +495,60 @@ class SftpMirrorService {
     this.database.updateRunProgress(runId, progress);
   }
 
+  async processXmlSnapshots(runId, files, progress) {
+    const xmlFiles = files.filter(isXmlSnapshotCandidate);
+    if (!xmlFiles.length) {
+      return;
+    }
+
+    for (let index = 0; index < xmlFiles.length; index += 1) {
+      const file = xmlFiles[index];
+      this.updateProgress(runId, progress, {
+        phase: "indexing",
+        currentPath: file.remotePath,
+        message: `Indexing XML ${index + 1} of ${xmlFiles.length}: ${file.fileName}`
+      });
+
+      try {
+        const parsed = await parseXmlSnapshot(file.eventSnapshotPath, {
+          fileName: file.fileName,
+          remotePath: file.remotePath,
+          folderPath: file.folderPath
+        });
+        const fileEventId = this.database.getFileEventIdBySnapshotPath(file.eventSnapshotPath);
+
+        this.database.upsertXmlDocument({
+          fileEventId,
+          runId,
+          folderPath: file.folderPath,
+          remotePath: file.remotePath,
+          fileName: file.fileName,
+          snapshotPath: file.eventSnapshotPath,
+          documentType: parsed.documentType,
+          recordKey: parsed.recordKey,
+          orderNumber: parsed.orderNumber,
+          orderDate: parsed.orderDate,
+          shipTo: parsed.shipTo,
+          customerName: parsed.customerName,
+          itemCount: parsed.itemCount,
+          totalQty: parsed.totalQty,
+          itemPreview: parsed.itemPreview,
+          parseStatus: parsed.parseStatus,
+          parseMessage: parsed.parseMessage,
+          parsedAt: parsed.parsedAt,
+          items: parsed.items
+        });
+      } catch (error) {
+        this.logger.error(`XML indexing failed for ${file.remotePath}:`, error);
+      }
+    }
+
+    this.updateProgress(runId, progress, {
+      phase: "finalizing",
+      message: "XML indexing complete. Finalizing the sync..."
+    });
+  }
+
   deriveProgress(progress) {
     const elapsedSeconds = Math.max(0, (Date.now() - new Date(progress.startedAt).getTime()) / 1000);
     let percentComplete = progress.percentComplete || 0;
@@ -509,6 +574,8 @@ class SftpMirrorService {
         45,
         Math.min(96, Math.round(45 + (progress.processedFiles / totalFiles) * 51))
       );
+    } else if (progress.phase === "indexing") {
+      percentComplete = 97;
     } else if (progress.phase === "finalizing") {
       percentComplete = 98;
     }

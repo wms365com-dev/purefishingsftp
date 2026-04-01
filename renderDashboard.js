@@ -97,6 +97,23 @@ function formatSize(value) {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+function formatQuantity(value, fallback = "") {
+  if (value === null || value === undefined || value === "") {
+    return fallback || "-";
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback || String(value);
+  }
+
+  if (Number.isInteger(numeric)) {
+    return String(numeric);
+  }
+
+  return numeric.toFixed(2).replace(/\.?0+$/, "");
+}
+
 function shortenChecksum(value) {
   if (!value) {
     return "-";
@@ -402,12 +419,110 @@ function renderDailyTrendCards(report) {
           </div>
           <span class="mobile-chip">${escapeHtml(day.totalAdded)} files</span>
         </div>
-        <div class="trend-day-meta">${escapeHtml(day.activeFolders)} folder(s) active • ${escapeHtml(formatSize(day.totalBytes))}</div>
+        <div class="trend-day-meta">${escapeHtml(day.activeFolders)} folder(s) active - ${escapeHtml(formatSize(day.totalBytes))}</div>
         <div class="bar trend-total-bar"><span style="width:${totalWidth}%"></span></div>
         <div class="trend-rows">${rows}</div>
       </article>
     `;
   }).join("");
+}
+
+function renderXmlItemRows(items) {
+  if (!items.length) {
+    return `<tr><td colspan="4" class="empty">No line items were extracted from this XML.</td></tr>`;
+  }
+
+  return items.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.line_number)}</td>
+      <td class="path">${escapeHtml(item.item_code || "-")}</td>
+      <td class="path">${escapeHtml(item.description || "-")}</td>
+      <td>${escapeHtml(formatQuantity(item.quantity_value, item.quantity_text))}${item.uom ? ` ${escapeHtml(item.uom)}` : ""}</td>
+    </tr>
+  `).join("");
+}
+
+function renderXmlDocumentCards(documents, timezone) {
+  if (!documents.length) {
+    return `<div class="mobile-empty">No XML records have been indexed for this folder yet.</div>`;
+  }
+
+  return documents.map((document, index) => `
+    <details class="xml-doc"${index === 0 ? " open" : ""}>
+      <summary class="xml-doc-summary">
+        <div class="xml-doc-grid">
+          <span class="xml-doc-cell"><strong>${escapeHtml(document.order_date || formatDateTime(document.parsed_at, timezone))}</strong><small>Order date</small></span>
+          <span class="xml-doc-cell"><strong>${escapeHtml(document.customer_name || "-")}</strong><small>Customer</small></span>
+          <span class="xml-doc-cell"><strong>${escapeHtml(document.ship_to || "-")}</strong><small>Ship to</small></span>
+          <span class="xml-doc-cell"><strong>${escapeHtml(document.item_count || 0)}</strong><small>Items</small></span>
+          <span class="xml-doc-cell"><strong>${escapeHtml(formatQuantity(document.total_qty))}</strong><small>Qty</small></span>
+        </div>
+      </summary>
+      <div class="xml-doc-body">
+        <div class="detail-list xml-doc-meta">
+          <div><strong>Record key</strong><span>${escapeHtml(document.record_key || document.file_name)}</span></div>
+          <div><strong>Document type</strong><span>${escapeHtml(document.document_type || "XML")}</span></div>
+          <div><strong>Order number</strong><span>${escapeHtml(document.order_number || "-")}</span></div>
+          <div><strong>Item preview</strong><span>${escapeHtml(document.item_preview || "-")}</span></div>
+          <div><strong>Source file</strong><span>${escapeHtml(document.file_name)}</span></div>
+          <div><strong>Indexed</strong><span>${escapeHtml(formatDateTime(document.parsed_at, timezone))}</span></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Line</th><th>Item</th><th>Description</th><th>Qty</th>
+              </tr>
+            </thead>
+            <tbody>${renderXmlItemRows(document.items || [])}</tbody>
+          </table>
+        </div>
+        <div class="button-row" style="margin-top:0.85rem">
+          ${document.file_event_id ? `<a class="button-link secondary" href="/files/download?id=${encodeURIComponent(document.file_event_id)}">Download XML</a>` : ""}
+        </div>
+      </div>
+    </details>
+  `).join("");
+}
+
+function renderXmlFolderTabs(folderTabs, timezone) {
+  if (!folderTabs.length) {
+    return `<div class="mobile-empty">XML indexing is ready. Once XML files are downloaded, each folder will appear here as its own tab.</div>`;
+  }
+
+  const tabs = folderTabs.map((folder, index) => `
+    <button
+      type="button"
+      class="folder-tab-button${index === 0 ? " active" : ""}"
+      data-folder-tab-button
+      data-target="${escapeHtml(folder.tab_id)}"
+    >
+      <span class="folder-tab-label" title="${escapeHtml(folder.folder_path)}">${escapeHtml(shortenFolderPath(folder.folder_path))}</span>
+      <strong>${escapeHtml(folder.total_documents)}</strong>
+    </button>
+  `).join("");
+
+  const panels = folderTabs.map((folder, index) => `
+    <section
+      class="folder-tab-panel${index === 0 ? " active" : ""}"
+      id="${escapeHtml(folder.tab_id)}"
+      data-folder-tab-panel
+    >
+      <div class="summary-grid" style="margin-top:0">
+        <div class="summary-card"><span>Folder</span><strong>${escapeHtml(folder.folder_path)}</strong></div>
+        <div class="summary-card"><span>Documents</span><strong>${escapeHtml(folder.total_documents)}</strong></div>
+        <div class="summary-card"><span>Items</span><strong>${escapeHtml(folder.total_items || 0)}</strong></div>
+        <div class="summary-card"><span>Total Qty</span><strong>${escapeHtml(formatQuantity(folder.total_qty))}</strong></div>
+        <div class="summary-card"><span>Last Indexed</span><strong>${escapeHtml(formatDateTime(folder.last_parsed_at, timezone))}</strong></div>
+      </div>
+      <div class="xml-doc-list">${renderXmlDocumentCards(folder.documents || [], timezone)}</div>
+    </section>
+  `).join("");
+
+  return `
+    <div class="folder-tab-strip">${tabs}</div>
+    <div class="folder-tab-panels">${panels}</div>
+  `;
 }
 
 function renderDashboard({ dashboard, config, serviceState, flashMessage, filters, intake = {}, asn = {}, trend = {}, links }) {
@@ -416,6 +531,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const dailyFolderIntake = dashboard.dailyFolderIntake || [];
   const asnHourlyReport = dashboard.asnHourlyReport || null;
   const dailyFolderTrend = dashboard.dailyFolderTrend || null;
+  const xmlFolderTabs = dashboard.xmlFolderTabs || [];
   const statusText = serviceState.running ? "Sync running" : "Idle";
   const currentRun = serviceState.currentRun || null;
   const disableNotice = config.autoSyncEnabled ? "" : `<p class="flash warn">Automatic sync is disabled.</p>`;
@@ -434,6 +550,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const asnDateLabel = asn.label || asn.date || "";
   const trendSummary = trend.summary || dailyFolderTrend?.summary || null;
   const trendDateLabel = trend.date || "";
+  const xmlDocumentCount = xmlFolderTabs.reduce((sum, folder) => sum + (Number(folder.total_documents) || 0), 0);
 
   const autoRefreshScript = serviceState.running ? `
   <script>
@@ -454,6 +571,32 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       tick();
     }());
   </script>` : "";
+
+  const folderTabScript = `
+  <script>
+    (function () {
+      var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-folder-tab-button]'));
+      var panels = Array.prototype.slice.call(document.querySelectorAll('[data-folder-tab-panel]'));
+      if (!buttons.length || !panels.length) {
+        return;
+      }
+
+      function activateTab(targetId) {
+        buttons.forEach(function (button) {
+          button.classList.toggle('active', button.getAttribute('data-target') === targetId);
+        });
+        panels.forEach(function (panel) {
+          panel.classList.toggle('active', panel.id === targetId);
+        });
+      }
+
+      buttons.forEach(function (button) {
+        button.addEventListener('click', function () {
+          activateTab(button.getAttribute('data-target'));
+        });
+      });
+    }());
+  </script>`;
 
   const liveProgress = currentRun ? `
     <div class="flash" style="margin-top:16px">
@@ -883,6 +1026,170 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       gap: 0.55rem;
     }
 
+    details.card {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .accordion-summary {
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+      padding: 1rem 1.05rem;
+      cursor: pointer;
+    }
+
+    .accordion-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .accordion-summary-main {
+      display: grid;
+      gap: 0.2rem;
+    }
+
+    .accordion-summary .eyebrow {
+      margin: 0;
+    }
+
+    .accordion-summary h2 {
+      font-size: 1.1rem;
+    }
+
+    .accordion-summary-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem 0.8rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    .accordion-summary-meta::after {
+      content: "+";
+      font-size: 1rem;
+      color: var(--brand);
+    }
+
+    details[open] > .accordion-summary .accordion-summary-meta::after {
+      content: "-";
+    }
+
+    .accordion-body {
+      padding: 0 1.05rem 1rem;
+      border-top: 1px solid var(--line);
+    }
+
+    .folder-tab-strip {
+      display: flex;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      margin-top: 1rem;
+    }
+
+    .folder-tab-button {
+      min-height: auto;
+      padding: 0.8rem 0.95rem;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      display: grid;
+      gap: 0.15rem;
+      text-align: left;
+      min-width: 120px;
+    }
+
+    .folder-tab-button.active {
+      background: linear-gradient(135deg, rgba(23, 104, 255, 0.12), rgba(76, 192, 255, 0.12));
+      border-color: rgba(23, 104, 255, 0.18);
+    }
+
+    .folder-tab-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.25;
+      word-break: break-word;
+    }
+
+    .folder-tab-panels {
+      margin-top: 1rem;
+    }
+
+    .folder-tab-panel {
+      display: none;
+    }
+
+    .folder-tab-panel.active {
+      display: block;
+    }
+
+    .xml-doc-list {
+      display: grid;
+      gap: 0.8rem;
+      margin-top: 1rem;
+    }
+
+    .xml-doc {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: linear-gradient(180deg, #ffffff, #f8fbff);
+      overflow: hidden;
+    }
+
+    .xml-doc-summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.85rem 0.95rem;
+    }
+
+    .xml-doc-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .xml-doc-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+
+    .xml-doc-cell {
+      display: grid;
+      gap: 0.18rem;
+      min-width: 0;
+    }
+
+    .xml-doc-cell strong,
+    .xml-doc-cell small {
+      word-break: break-word;
+      line-height: 1.25;
+    }
+
+    .xml-doc-cell small {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .xml-doc-body {
+      padding: 0 0.95rem 0.95rem;
+      border-top: 1px solid var(--line);
+    }
+
+    .xml-doc-meta {
+      margin-top: 0.85rem;
+    }
+
     .intake-header {
       display: grid;
       gap: 0.9rem;
@@ -1131,6 +1438,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       .hero, .section-grid { grid-template-columns: 1fr; }
       .summary-grid, .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form.filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .xml-doc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .intake-header { grid-template-columns: 1fr; }
       .asn-report-head { grid-template-columns: 1fr; }
       .trend-head { grid-template-columns: 1fr; }
@@ -1219,6 +1527,11 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         align-items: stretch;
       }
 
+      .accordion-summary {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
       .card {
         margin: 0.75rem 0.5rem 0;
         padding: 0.9rem;
@@ -1230,6 +1543,19 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
 
       .mobile-card-stats {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .folder-tab-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .folder-tab-button {
+        min-width: 0;
+      }
+
+      .xml-doc-grid {
+        grid-template-columns: 1fr;
       }
 
       .intake-controls {
@@ -1304,239 +1630,290 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       </aside>
     </section>
 
-    <section class="card filters-card">
-      <div class="eyebrow">Reports</div>
-      <div class="form-copy">
-        <h2>File Activity Filters</h2>
+    <details class="card accordion" open>
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">XML Records</div>
+          <h2>Folder Tabs And Parsed Documents</h2>
+        </div>
+        <span class="accordion-summary-meta">${escapeHtml(xmlDocumentCount)} docs</span>
+      </summary>
+      <div class="accordion-body">
+        <p class="meta">Each folder gets its own tab, and each XML record can expand to show key fields and line items.</p>
+        ${renderXmlFolderTabs(xmlFolderTabs, config.timezone)}
+      </div>
+    </details>
+
+    <details class="card accordion filters-card">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Reports</div>
+          <h2>File Activity Filters</h2>
+        </div>
+        <span class="accordion-summary-meta">Filter</span>
+      </summary>
+      <div class="accordion-body">
         <p class="meta">Filter the audit trail and export only the slice you need.</p>
-      </div>
-      <form class="filters" method="get" action="/">
-        <label>
-          Search
-          <input type="text" name="q" value="${escapeHtml(filters.q || "")}" placeholder="File or path">
-        </label>
-        <label>
-          Status
-          <select name="status">
-            <option value="">All statuses</option>
-            <option value="new"${filters.status === "new" ? " selected" : ""}>New</option>
-            <option value="changed"${filters.status === "changed" ? " selected" : ""}>Changed</option>
-            <option value="unchanged"${filters.status === "unchanged" ? " selected" : ""}>Unchanged</option>
-            <option value="deleted"${filters.status === "deleted" ? " selected" : ""}>Deleted</option>
-          </select>
-        </label>
-        <label>
-          Folder
-          <input type="text" name="folder" value="${escapeHtml(filters.folder || "")}" placeholder="/BlueDog/Orders">
-        </label>
-        <label>
-          Date From
-          <input type="date" name="date_from" value="${escapeHtml(filters.dateFrom || "")}">
-        </label>
-        <label>
-          Date To
-          <input type="date" name="date_to" value="${escapeHtml(filters.dateTo || "")}">
-        </label>
-        <label>
-          Run ID
-          <input type="number" min="1" name="run_id" value="${escapeHtml(filters.runId || "")}" placeholder="Optional">
-        </label>
-        <div class="filter-actions">
-          <button type="submit">Apply Filters</button>
-          <a class="button-link secondary" href="/">Clear</a>
-          <a class="button-link secondary" href="${escapeHtml(links.activityCsv)}">Export Activity CSV</a>
-        </div>
-      </form>
-      <div class="summary-grid" style="margin-top:1rem">
-        <div class="summary-card"><span>New</span><strong>${escapeHtml(activitySummary.new || 0)}</strong></div>
-        <div class="summary-card"><span>Changed</span><strong>${escapeHtml(activitySummary.changed || 0)}</strong></div>
-        <div class="summary-card"><span>Deleted</span><strong>${escapeHtml(activitySummary.deleted || 0)}</strong></div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">Daily Intake</div>
-      <div class="intake-header">
-        <div class="form-copy">
-          <h2>New Files By Folder</h2>
-          <p class="meta">A per-day intake board that shows which folders grew, how many fresh files landed there, and how much data was added.</p>
-        </div>
-        <form class="intake-controls" method="get" action="/">
-          ${renderHiddenFilterInputs(filters, { includeAsnDate: true, includeTrendDate: true, includeTrendDays: true })}
+        <form class="filters" method="get" action="/">
           <label>
-            Selected Day
-            <input type="date" name="intake_date" value="${escapeHtml(intake.date || "")}">
-          </label>
-          <button type="submit">Show Day</button>
-        </form>
-      </div>
-      <div class="summary-grid intake-summary">
-        <div class="summary-card"><span>Selected Day</span><strong>${escapeHtml(intakeDateLabel || "Today")}</strong></div>
-        <div class="summary-card"><span>New Files</span><strong>${escapeHtml(intake.totalAdded || 0)}</strong></div>
-        <div class="summary-card"><span>Active Folders</span><strong>${escapeHtml(dailyFolderIntake.length)}</strong></div>
-        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(intakeTotalBytes))}</strong></div>
-      </div>
-      <div class="intake-leader">
-        ${intakeLeader
-          ? `Top folder for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}: <strong>${escapeHtml(intakeLeader.folder_path)}</strong> with <strong>${escapeHtml(intakeLeader.added_count)} new files</strong> and <strong>${escapeHtml(formatSize(intakeLeader.added_bytes))}</strong> added.`
-          : `No new files were logged for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}.`}
-      </div>
-      <div class="intake-list">${renderDailyIntakeRows(dailyFolderIntake)}</div>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">Daily Chart</div>
-      <div class="trend-head">
-        <div class="form-copy">
-          <h2>Files Added By Day And Folder</h2>
-          <p class="meta">A rolling bar-chart view that shows how many new files each folder received on each day in the selected window.</p>
-        </div>
-        <form class="intake-controls" method="get" action="/">
-          ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeAsnDate: true })}
-          <label>
-            End Day
-            <input type="date" name="trend_date" value="${escapeHtml(trend.date || "")}">
+            Search
+            <input type="text" name="q" value="${escapeHtml(filters.q || "")}" placeholder="File or path">
           </label>
           <label>
-            Window
-            <select name="trend_days">
-              <option value="7"${Number(trend.days) === 7 ? " selected" : ""}>Last 7 days</option>
-              <option value="14"${Number(trend.days) === 14 ? " selected" : ""}>Last 14 days</option>
-              <option value="30"${Number(trend.days) === 30 ? " selected" : ""}>Last 30 days</option>
+            Status
+            <select name="status">
+              <option value="">All statuses</option>
+              <option value="new"${filters.status === "new" ? " selected" : ""}>New</option>
+              <option value="changed"${filters.status === "changed" ? " selected" : ""}>Changed</option>
+              <option value="unchanged"${filters.status === "unchanged" ? " selected" : ""}>Unchanged</option>
+              <option value="deleted"${filters.status === "deleted" ? " selected" : ""}>Deleted</option>
             </select>
           </label>
-          <button type="submit">Show Chart</button>
-        </form>
-      </div>
-      <div class="summary-grid intake-summary">
-        <div class="summary-card"><span>End Day</span><strong>${escapeHtml(trendDateLabel || "Today")}</strong></div>
-        <div class="summary-card"><span>Days Shown</span><strong>${escapeHtml(trendSummary?.daysTracked || trend.days || 0)}</strong></div>
-        <div class="summary-card"><span>Total New Files</span><strong>${escapeHtml(trendSummary?.totalAdded || 0)}</strong></div>
-        <div class="summary-card"><span>Folders Active</span><strong>${escapeHtml(trendSummary?.activeFolders || 0)}</strong></div>
-        <div class="summary-card"><span>Peak Day</span><strong>${escapeHtml(trendSummary?.peakDayLabel ? `${formatDateLabel(trendSummary.peakDayLabel)} (${trendSummary.peakDayCount})` : "No activity")}</strong></div>
-        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(trendSummary?.totalBytes || 0))}</strong></div>
-      </div>
-      <div class="trend-grid">${renderDailyTrendCards(dailyFolderTrend)}</div>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">ASN Hourly</div>
-      <div class="asn-report-head">
-        <div class="form-copy">
-          <h2>ASN Confirmations By Hour</h2>
-          <p class="meta">Track how many new ASN confirmation files landed in ${escapeHtml(config.asnReportFolder)} each hour of the selected day.</p>
-        </div>
-        <form class="intake-controls" method="get" action="/">
-          ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeTrendDate: true, includeTrendDays: true })}
           <label>
-            ASN Day
-            <input type="date" name="asn_date" value="${escapeHtml(asn.date || "")}">
+            Folder
+            <input type="text" name="folder" value="${escapeHtml(filters.folder || "")}" placeholder="/BlueDog/Orders">
           </label>
-          <button type="submit">Show ASN Day</button>
-          <a class="button-link secondary" href="${escapeHtml(links.asnHourlyCsv)}">Export ASN CSV</a>
+          <label>
+            Date From
+            <input type="date" name="date_from" value="${escapeHtml(filters.dateFrom || "")}">
+          </label>
+          <label>
+            Date To
+            <input type="date" name="date_to" value="${escapeHtml(filters.dateTo || "")}">
+          </label>
+          <label>
+            Run ID
+            <input type="number" min="1" name="run_id" value="${escapeHtml(filters.runId || "")}" placeholder="Optional">
+          </label>
+          <div class="filter-actions">
+            <button type="submit">Apply Filters</button>
+            <a class="button-link secondary" href="/">Clear</a>
+            <a class="button-link secondary" href="${escapeHtml(links.activityCsv)}">Export Activity CSV</a>
+          </div>
         </form>
-      </div>
-      <div class="summary-grid intake-summary">
-        <div class="summary-card"><span>ASN Day</span><strong>${escapeHtml(asnDateLabel || "Today")}</strong></div>
-        <div class="summary-card"><span>ASN Files Added</span><strong>${escapeHtml(asnSummary?.totalAdded || 0)}</strong></div>
-        <div class="summary-card"><span>Active Hours</span><strong>${escapeHtml(asnSummary?.activeHours || 0)}</strong></div>
-        <div class="summary-card"><span>Peak Hour</span><strong>${escapeHtml(asnSummary?.peakHourLabel ? `${asnSummary.peakHourLabel} (${asnSummary.peakCount})` : "No activity")}</strong></div>
-        <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(asnSummary?.totalBytes || 0))}</strong></div>
-      </div>
-      <div class="asn-note">
-        ${asnSummary?.peakHourLabel
-          ? `Busiest ASN hour on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}: <strong>${escapeHtml(asnSummary.peakHourLabel)}</strong> with <strong>${escapeHtml(asnSummary.peakCount)} file(s)</strong> added.`
-          : `No ASN confirmation files were added in ${escapeHtml(config.asnReportFolder)} on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}.`}
-      </div>
-      <section class="desktop-only">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Hour</th><th>Added Files</th><th>Added Size</th><th>First Arrival</th><th>Last Arrival</th><th>Visual</th>
-              </tr>
-            </thead>
-            <tbody>${renderAsnHourlyRows(asnHourlyReport, config.timezone)}</tbody>
-          </table>
+        <div class="summary-grid" style="margin-top:1rem">
+          <div class="summary-card"><span>New</span><strong>${escapeHtml(activitySummary.new || 0)}</strong></div>
+          <div class="summary-card"><span>Changed</span><strong>${escapeHtml(activitySummary.changed || 0)}</strong></div>
+          <div class="summary-card"><span>Deleted</span><strong>${escapeHtml(activitySummary.deleted || 0)}</strong></div>
         </div>
-      </section>
-      <section class="mobile-only">
-        <div class="mobile-card-list">${renderAsnHourlyCards(asnHourlyReport, config.timezone)}</div>
-      </section>
-    </section>
+      </div>
+    </details>
 
-    <section class="section-grid desktop-only">
-      <section class="card">
-        <div class="card-head">
-          <h2>Recent Sync Runs</h2>
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Daily Intake</div>
+          <h2>New Files By Folder</h2>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th><th>Trigger</th><th>Started</th><th>Changed</th><th>Deleted</th><th>Downloaded</th><th>Status</th><th>Message</th>
-              </tr>
-            </thead>
-            <tbody>${renderRunRows(dashboard.recentRuns || [], config.timezone)}</tbody>
-          </table>
+        <span class="accordion-summary-meta">${escapeHtml(intake.totalAdded || 0)} new</span>
+      </summary>
+      <div class="accordion-body">
+        <div class="intake-header">
+          <div class="form-copy">
+            <p class="meta">A per-day intake board that shows which folders grew, how many fresh files landed there, and how much data was added.</p>
+          </div>
+          <form class="intake-controls" method="get" action="/">
+            ${renderHiddenFilterInputs(filters, { includeAsnDate: true, includeTrendDate: true, includeTrendDays: true })}
+            <label>
+              Selected Day
+              <input type="date" name="intake_date" value="${escapeHtml(intake.date || "")}">
+            </label>
+            <button type="submit">Show Day</button>
+          </form>
         </div>
-      </section>
+        <div class="summary-grid intake-summary">
+          <div class="summary-card"><span>Selected Day</span><strong>${escapeHtml(intakeDateLabel || "Today")}</strong></div>
+          <div class="summary-card"><span>New Files</span><strong>${escapeHtml(intake.totalAdded || 0)}</strong></div>
+          <div class="summary-card"><span>Active Folders</span><strong>${escapeHtml(dailyFolderIntake.length)}</strong></div>
+          <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(intakeTotalBytes))}</strong></div>
+        </div>
+        <div class="intake-leader">
+          ${intakeLeader
+            ? `Top folder for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}: <strong>${escapeHtml(intakeLeader.folder_path)}</strong> with <strong>${escapeHtml(intakeLeader.added_count)} new files</strong> and <strong>${escapeHtml(formatSize(intakeLeader.added_bytes))}</strong> added.`
+            : `No new files were logged for ${escapeHtml(intakeDateLabel || intake.date || "the selected day")}.`}
+        </div>
+        <div class="intake-list">${renderDailyIntakeRows(dailyFolderIntake)}</div>
+      </div>
+    </details>
 
-      <section class="card">
-        <div class="card-head">
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Daily Chart</div>
+          <h2>Files Added By Day And Folder</h2>
+        </div>
+        <span class="accordion-summary-meta">${escapeHtml(trendSummary?.totalAdded || 0)} total</span>
+      </summary>
+      <div class="accordion-body">
+        <div class="trend-head">
+          <div class="form-copy">
+            <p class="meta">A rolling bar-chart view that shows how many new files each folder received on each day in the selected window.</p>
+          </div>
+          <form class="intake-controls" method="get" action="/">
+            ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeAsnDate: true })}
+            <label>
+              End Day
+              <input type="date" name="trend_date" value="${escapeHtml(trend.date || "")}">
+            </label>
+            <label>
+              Window
+              <select name="trend_days">
+                <option value="7"${Number(trend.days) === 7 ? " selected" : ""}>Last 7 days</option>
+                <option value="14"${Number(trend.days) === 14 ? " selected" : ""}>Last 14 days</option>
+                <option value="30"${Number(trend.days) === 30 ? " selected" : ""}>Last 30 days</option>
+              </select>
+            </label>
+            <button type="submit">Show Chart</button>
+          </form>
+        </div>
+        <div class="summary-grid intake-summary">
+          <div class="summary-card"><span>End Day</span><strong>${escapeHtml(trendDateLabel || "Today")}</strong></div>
+          <div class="summary-card"><span>Days Shown</span><strong>${escapeHtml(trendSummary?.daysTracked || trend.days || 0)}</strong></div>
+          <div class="summary-card"><span>Total New Files</span><strong>${escapeHtml(trendSummary?.totalAdded || 0)}</strong></div>
+          <div class="summary-card"><span>Folders Active</span><strong>${escapeHtml(trendSummary?.activeFolders || 0)}</strong></div>
+          <div class="summary-card"><span>Peak Day</span><strong>${escapeHtml(trendSummary?.peakDayLabel ? `${formatDateLabel(trendSummary.peakDayLabel)} (${trendSummary.peakDayCount})` : "No activity")}</strong></div>
+          <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(trendSummary?.totalBytes || 0))}</strong></div>
+        </div>
+        <div class="trend-grid">${renderDailyTrendCards(dailyFolderTrend)}</div>
+      </div>
+    </details>
+
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">ASN Hourly</div>
+          <h2>ASN Confirmations By Hour</h2>
+        </div>
+        <span class="accordion-summary-meta">${escapeHtml(asnSummary?.totalAdded || 0)} files</span>
+      </summary>
+      <div class="accordion-body">
+        <div class="asn-report-head">
+          <div class="form-copy">
+            <p class="meta">Track how many new ASN confirmation files landed in ${escapeHtml(config.asnReportFolder)} each hour of the selected day.</p>
+          </div>
+          <form class="intake-controls" method="get" action="/">
+            ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeTrendDate: true, includeTrendDays: true })}
+            <label>
+              ASN Day
+              <input type="date" name="asn_date" value="${escapeHtml(asn.date || "")}">
+            </label>
+            <button type="submit">Show ASN Day</button>
+            <a class="button-link secondary" href="${escapeHtml(links.asnHourlyCsv)}">Export ASN CSV</a>
+          </form>
+        </div>
+        <div class="summary-grid intake-summary">
+          <div class="summary-card"><span>ASN Day</span><strong>${escapeHtml(asnDateLabel || "Today")}</strong></div>
+          <div class="summary-card"><span>ASN Files Added</span><strong>${escapeHtml(asnSummary?.totalAdded || 0)}</strong></div>
+          <div class="summary-card"><span>Active Hours</span><strong>${escapeHtml(asnSummary?.activeHours || 0)}</strong></div>
+          <div class="summary-card"><span>Peak Hour</span><strong>${escapeHtml(asnSummary?.peakHourLabel ? `${asnSummary.peakHourLabel} (${asnSummary.peakCount})` : "No activity")}</strong></div>
+          <div class="summary-card"><span>Added Size</span><strong>${escapeHtml(formatSize(asnSummary?.totalBytes || 0))}</strong></div>
+        </div>
+        <div class="asn-note">
+          ${asnSummary?.peakHourLabel
+            ? `Busiest ASN hour on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}: <strong>${escapeHtml(asnSummary.peakHourLabel)}</strong> with <strong>${escapeHtml(asnSummary.peakCount)} file(s)</strong> added.`
+            : `No ASN confirmation files were added in ${escapeHtml(config.asnReportFolder)} on ${escapeHtml(asnDateLabel || asn.date || "the selected day")}.`}
+        </div>
+        <section class="desktop-only">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Hour</th><th>Added Files</th><th>Added Size</th><th>First Arrival</th><th>Last Arrival</th><th>Visual</th>
+                </tr>
+              </thead>
+              <tbody>${renderAsnHourlyRows(asnHourlyReport, config.timezone)}</tbody>
+            </table>
+          </div>
+        </section>
+        <section class="mobile-only">
+          <div class="mobile-card-list">${renderAsnHourlyCards(asnHourlyReport, config.timezone)}</div>
+        </section>
+      </div>
+    </details>
+
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Folder Counts</div>
           <h2>Total File Count By Folder</h2>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Folder</th><th>Direct</th><th>Total</th><th>Visual</th>
-              </tr>
-            </thead>
-            <tbody>${renderFolderRows(dashboard.folderStats || [])}</tbody>
-          </table>
+        <span class="accordion-summary-meta">${escapeHtml((dashboard.folderStats || []).length)} folders</span>
+      </summary>
+      <div class="accordion-body">
+        <section class="desktop-only">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Folder</th><th>Direct</th><th>Total</th><th>Visual</th>
+                </tr>
+              </thead>
+              <tbody>${renderFolderRows(dashboard.folderStats || [])}</tbody>
+            </table>
+          </div>
+        </section>
+        <section class="mobile-only">
+          <div class="mobile-card-list">${renderFolderCards(dashboard.folderStats || [])}</div>
+        </section>
+      </div>
+    </details>
+
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Activity</div>
+          <h2>File Activity</h2>
         </div>
-      </section>
-    </section>
+        <span class="accordion-summary-meta">${escapeHtml(activitySummary.total || 0)} rows</span>
+      </summary>
+      <div class="accordion-body">
+        <section class="desktop-only">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>When</th><th>Event</th><th>Run</th><th>Folder</th><th>File</th><th>Size</th><th>Checksum</th><th>Archive</th>
+                </tr>
+              </thead>
+              <tbody>${renderActivityRows(dashboard.fileActivity || [], config.timezone)}</tbody>
+            </table>
+          </div>
+        </section>
+        <section class="mobile-only">
+          <div class="mobile-card-list">${renderActivityCards(dashboard.fileActivity || [], config.timezone)}</div>
+        </section>
+      </div>
+    </details>
 
-    <section class="card mobile-only">
-      <div class="card-head">
-        <h2>Recent Sync Runs</h2>
+    <details class="card accordion">
+      <summary class="accordion-summary">
+        <div class="accordion-summary-main">
+          <div class="eyebrow">Sync Runs</div>
+          <h2>Recent Sync Runs</h2>
+        </div>
+        <span class="accordion-summary-meta">${escapeHtml((dashboard.recentRuns || []).length)} runs</span>
+      </summary>
+      <div class="accordion-body">
+        <section class="desktop-only">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Trigger</th><th>Started</th><th>Changed</th><th>Deleted</th><th>Downloaded</th><th>Status</th><th>Message</th>
+                </tr>
+              </thead>
+              <tbody>${renderRunRows(dashboard.recentRuns || [], config.timezone)}</tbody>
+            </table>
+          </div>
+        </section>
+        <section class="mobile-only">
+          <div class="mobile-card-list">${renderRunCards(dashboard.recentRuns || [], config.timezone)}</div>
+        </section>
       </div>
-      <div class="mobile-card-list">${renderRunCards(dashboard.recentRuns || [], config.timezone)}</div>
-    </section>
-
-    <section class="card mobile-only">
-      <div class="card-head">
-        <h2>Total File Count By Folder</h2>
-      </div>
-      <div class="mobile-card-list">${renderFolderCards(dashboard.folderStats || [])}</div>
-    </section>
-
-    <section class="card desktop-only">
-      <div class="card-head">
-        <h2>File Activity</h2>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>When</th><th>Event</th><th>Run</th><th>Folder</th><th>File</th><th>Size</th><th>Checksum</th><th>Archive</th>
-            </tr>
-          </thead>
-          <tbody>${renderActivityRows(dashboard.fileActivity || [], config.timezone)}</tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="card mobile-only">
-      <div class="card-head">
-        <h2>File Activity</h2>
-      </div>
-      <div class="mobile-card-list">${renderActivityCards(dashboard.fileActivity || [], config.timezone)}</div>
-    </section>
+    </details>
   </main>
 ${autoRefreshScript}
+${folderTabScript}
 </body>
 </html>`;
 }

@@ -6,6 +6,7 @@ It also includes:
 
 - A built-in scheduler that can run Monday through Friday just before each top-of-hour pull window, or on a fixed minute schedule if you prefer the older behavior.
 - A dashboard showing recent sync runs, total file counts by folder, and searchable file activity.
+- Automatic XML indexing for downloaded snapshots, with parsed order/customer/ship-to/item details stored in SQLite.
 - Per-file audit history for new, changed, unchanged, and deleted files.
 - CSV exports for file activity and sync runs.
 - Optional webhook and SMTP email alerts for failures, activity, and daily summaries.
@@ -94,6 +95,7 @@ The dashboard includes:
 - Total file counts by folder.
 - A daily folder bar chart that shows new files by day and by folder over the last 7, 14, or 30 days.
 - A dedicated ASN hourly report for `/BlueDog/ASN/Production` by default, with per-hour file counts and CSV export.
+- Folder tabs for parsed XML documents, including order date, customer, ship-to, item count, quantity, and line-item drilldown.
 - Search filters for file/path, status, folder, run id, and date range.
 - Direct download links for archived files when a snapshot exists.
 - `Export Activity CSV` for filtered file history.
