@@ -79,6 +79,25 @@ async function listDirectories(rootPath) {
   }
 }
 
+async function withTimeout(promise, timeoutMs, label) {
+  let timeoutHandle = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs} ms`));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 class SftpMirrorService {
   constructor(config, database, logger = console, options = {}) {
     this.config = config;
@@ -147,9 +166,13 @@ class SftpMirrorService {
     try {
       this.updateProgress(runId, progress, {
         phase: "connecting",
-        message: `Connecting to ${this.config.sftp.host}:${this.config.sftp.port}...`
+        message: `Connecting to ${this.config.sftp.host}:${this.config.sftp.port} with a ${Math.round(this.config.sftp.readyTimeoutMs / 1000)} second timeout...`
       });
-      await sftp.connect(this.buildConnectionOptions());
+      await withTimeout(
+        sftp.connect(this.buildConnectionOptions()),
+        this.config.sftp.readyTimeoutMs,
+        `Connection to ${this.config.sftp.host}:${this.config.sftp.port}`
+      );
       this.updateProgress(runId, progress, {
         phase: "scanning",
         currentPath: this.config.sftp.remoteRoot,
@@ -334,6 +357,7 @@ class SftpMirrorService {
     const options = {
       host: this.config.sftp.host,
       port: this.config.sftp.port,
+      readyTimeout: this.config.sftp.readyTimeoutMs,
       username: this.config.sftp.username
     };
 

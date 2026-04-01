@@ -133,6 +133,7 @@ function loadConfig() {
     sftp: {
       host: process.env.SFTP_HOST || "",
       port: parseNumber(process.env.SFTP_PORT, 22),
+      readyTimeoutMs: Math.max(parseNumber(process.env.SFTP_READY_TIMEOUT_MS, 20000), 5000),
       username: process.env.SFTP_USERNAME || "",
       password: process.env.SFTP_PASSWORD || "",
       privateKey: parsePrivateKey(),
