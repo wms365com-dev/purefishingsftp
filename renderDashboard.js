@@ -543,6 +543,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
     ? `${config.snapshotRetentionDays} day(s)`
     : "Disabled";
   const alertsLabel = config.alertsConfigured ? "Configured" : "Not configured";
+  const connectPolicyLabel = `${Math.round((Number(config.sftpReadyTimeoutMs) || 0) / 1000)}s timeout, ${Number(config.sftpConnectRetries) || 0} retr${Number(config.sftpConnectRetries) === 1 ? "y" : "ies"}`;
   const intakeTotalBytes = dailyFolderIntake.reduce((sum, entry) => sum + (Number(entry.added_bytes) || 0), 0);
   const intakeLeader = dailyFolderIntake[0] || null;
   const intakeDateLabel = intake.label || intake.date || "";
@@ -1612,6 +1613,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         <div class="detail-list">
           <div><strong>Remote root</strong><span>${escapeHtml(config.remoteRoot)}</span></div>
           <div><strong>SFTP host</strong><span>${escapeHtml(config.sftpHost)}:${escapeHtml(config.sftpPort)}</span></div>
+          <div><strong>Connect policy</strong><span>${escapeHtml(connectPolicyLabel)}</span></div>
           <div><strong>Schedule</strong><span>${escapeHtml(config.schedule)}</span></div>
           <div><strong>Alerts</strong><span>${escapeHtml(alertsLabel)}</span></div>
           <div><strong>Snapshot retention</strong><span>${escapeHtml(retentionLabel)}</span></div>

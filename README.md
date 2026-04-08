@@ -56,6 +56,9 @@ Optional general settings:
 - `DATA_ROOT=./data`
 - `REMOTE_ROOT=/`
 - `SFTP_PORT=22`
+- `SFTP_READY_TIMEOUT_MS=20000`
+- `SFTP_CONNECT_RETRIES=2`
+- `SFTP_CONNECT_RETRY_DELAY_MS=5000`
 - `SFTP_PASSPHRASE=`
 - `APP_TIMEZONE=America/New_York`
 - `ASN_REPORT_FOLDER=/BlueDog/ASN/Production`
@@ -146,6 +149,7 @@ Then open `http://localhost:3000`.
 ## Notes
 
 - For top-of-hour capture windows, set `SYNC_TARGET_START_HOUR`, `SYNC_TARGET_END_HOUR`, and `SYNC_LEAD_MINUTES`. Example: `8`, `17`, and `1` runs at `7:59`, `8:59`, ..., `16:59` to capture the `8:00 AM` through `5:00 PM` hourly boundary.
+- If the SFTP server is slow to answer from Railway, increase `SFTP_READY_TIMEOUT_MS` to `60000`. The service now retries connection-level timeouts by default before failing a run.
 - If a scheduled slot happens while a sync is still running, the service now queues one follow-up scheduled sync to start immediately after the current run completes.
 - If you prefer the older fixed-minute pattern, omit the `SYNC_TARGET_*` variables and use `SYNC_START_HOUR`, `SYNC_END_HOUR`, and `SYNC_MINUTE`.
 - Remote deletions are logged into the audit trail and removed from the current tracked set.

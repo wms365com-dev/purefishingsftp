@@ -108,6 +108,16 @@ async function withTimeout(promise, timeoutMs, label) {
   }
 }
 
+function sleep(delayMs) {
+  if (!delayMs) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
 class SftpMirrorService {
   constructor(config, database, logger = console, options = {}) {
     this.config = config;
@@ -196,7 +206,7 @@ class SftpMirrorService {
 
   async runSync(triggerSource, startedAt) {
     const runId = this.database.createRun(triggerSource, startedAt);
-    const sftp = new SftpClient("purefishing-sftp-mirror");
+    let sftp = null;
     let runResult = null;
     const estimatedTotalFiles = this.database.getTrackedFileEstimate();
     const progress = {
@@ -222,15 +232,7 @@ class SftpMirrorService {
     };
 
     try {
-      this.updateProgress(runId, progress, {
-        phase: "connecting",
-        message: `Connecting to ${this.config.sftp.host}:${this.config.sftp.port} with a ${Math.round(this.config.sftp.readyTimeoutMs / 1000)} second timeout...`
-      });
-      await withTimeout(
-        sftp.connect(this.buildConnectionOptions()),
-        this.config.sftp.readyTimeoutMs,
-        `Connection to ${this.config.sftp.host}:${this.config.sftp.port}`
-      );
+      sftp = await this.connectWithRetries(runId, progress);
       this.updateProgress(runId, progress, {
         phase: "scanning",
         currentPath: this.config.sftp.remoteRoot,
@@ -393,7 +395,7 @@ class SftpMirrorService {
       await this.notifyAlerts(runResult);
       throw error;
     } finally {
-      await sftp.end().catch(() => {});
+      await sftp?.end().catch(() => {});
     }
   }
 
@@ -422,6 +424,70 @@ class SftpMirrorService {
     } catch (error) {
       this.logger.error("Alert notification failed:", error);
     }
+  }
+
+  async connectWithRetries(runId, progress) {
+    const totalAttempts = Math.max(1, this.config.sftp.connectRetries + 1);
+
+    for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+      const sftp = new SftpClient(`purefishing-sftp-mirror-${runId}-attempt-${attempt}`);
+
+      try {
+        this.updateProgress(runId, progress, {
+          phase: "connecting",
+          message: `Connecting to ${this.config.sftp.host}:${this.config.sftp.port} (attempt ${attempt} of ${totalAttempts}) with a ${Math.round(this.config.sftp.readyTimeoutMs / 1000)} second timeout...`
+        });
+        await withTimeout(
+          sftp.connect(this.buildConnectionOptions()),
+          this.config.sftp.readyTimeoutMs,
+          `Connection to ${this.config.sftp.host}:${this.config.sftp.port}`
+        );
+
+        if (attempt > 1) {
+          this.updateProgress(runId, progress, {
+            phase: "connecting",
+            message: `Connected to ${this.config.sftp.host}:${this.config.sftp.port} on attempt ${attempt} of ${totalAttempts}.`
+          });
+        }
+
+        return sftp;
+      } catch (error) {
+        await sftp.end().catch(() => {});
+
+        if (!this.shouldRetryConnection(error) || attempt >= totalAttempts) {
+          throw error;
+        }
+
+        const delayMs = this.config.sftp.connectRetryDelayMs;
+        const retryDelaySeconds = Math.max(1, Math.round(delayMs / 1000));
+        this.updateProgress(runId, progress, {
+          phase: "connecting",
+          message: `Connection attempt ${attempt} of ${totalAttempts} failed: ${error.message}. Retrying in ${retryDelaySeconds} second${retryDelaySeconds === 1 ? "" : "s"}...`
+        });
+        await sleep(delayMs);
+      }
+    }
+
+    throw new Error(`Unable to connect to ${this.config.sftp.host}:${this.config.sftp.port}`);
+  }
+
+  shouldRetryConnection(error) {
+    if (!error || !error.message) {
+      return false;
+    }
+
+    const message = String(error.message).toLowerCase();
+    return [
+      "timed out",
+      "timeout",
+      "econnreset",
+      "econnrefused",
+      "ehostunreach",
+      "enetunreach",
+      "enotfound",
+      "handshake",
+      "no response from server"
+    ].some((fragment) => message.includes(fragment));
   }
 
   buildConnectionOptions() {

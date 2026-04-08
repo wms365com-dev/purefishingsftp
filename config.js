@@ -245,6 +245,8 @@ function loadConfig() {
       host: process.env.SFTP_HOST || "",
       port: parseNumber(process.env.SFTP_PORT, 22),
       readyTimeoutMs: Math.max(parseNumber(process.env.SFTP_READY_TIMEOUT_MS, 20000), 5000),
+      connectRetries: Math.max(parseNumber(process.env.SFTP_CONNECT_RETRIES, 2), 0),
+      connectRetryDelayMs: Math.max(parseNumber(process.env.SFTP_CONNECT_RETRY_DELAY_MS, 5000), 0),
       username: process.env.SFTP_USERNAME || "",
       password: process.env.SFTP_PASSWORD || "",
       privateKey: parsePrivateKey(),
@@ -290,6 +292,8 @@ function getPublicConfig(config) {
     alertsConfigured,
     sftpHost: config.sftp.host,
     sftpPort: config.sftp.port,
+    sftpReadyTimeoutMs: config.sftp.readyTimeoutMs,
+    sftpConnectRetries: config.sftp.connectRetries,
     asnReportFolder: config.asnReportFolder,
     authMode: config.sftp.privateKey ? "private key" : "password"
   };
