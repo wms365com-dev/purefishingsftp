@@ -332,7 +332,8 @@ function buildDesktopHtml(requestUrl) {
     dayRange,
     compareRange,
     timezone: config.timezone,
-    estimatedLineValue: config.orderLineEstimatedValue
+    estimatedLineValue: config.orderLineEstimatedValue,
+    timelineLookbackDays: config.opsTimelineLookbackDays
   });
 
   return renderDesktopDashboard({

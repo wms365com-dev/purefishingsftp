@@ -26,6 +26,12 @@ function getLocalDateLabel(isoValue, timezone) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function shiftIsoByDays(isoValue, offsetDays) {
+  const date = new Date(isoValue);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString();
+}
+
 function formatHourWindowLabel(hour) {
   const startDisplay = hour % 12 || 12;
   const endDisplay = hour % 12 || 12;
@@ -867,6 +873,7 @@ class MirrorDatabase {
     const dayRange = options.dayRange;
     const compareRange = options.compareRange || null;
     const estimatedLineValue = Math.max(Number(options.estimatedLineValue || 0), 0);
+    const timelineLookbackDays = Math.max(Number(options.timelineLookbackDays || 90), 1);
 
     if (!dayRange) {
       return null;
@@ -880,7 +887,8 @@ class MirrorDatabase {
       ? this.opsFlowEventsStmt.all(compareRange.startIso, compareRange.endIso)
       : [];
     const dayDocuments = this.opsXmlDocumentsInRangeStmt.all(dayRange.startIso, dayRange.endIso);
-    const timelineDocuments = this.opsXmlDocumentsThroughStmt.all(dayRange.endIso);
+    const timelineStartIso = shiftIsoByDays(dayRange.endIso, -timelineLookbackDays);
+    const timelineDocuments = this.opsXmlDocumentsInRangeStmt.all(timelineStartIso, dayRange.endIso);
     const latestRun = this.recentRunsStmt.all(1)[0] || null;
     const folderStats = this.folderStatsStmt.all(options.folderLimit || 12);
 
@@ -912,6 +920,7 @@ class MirrorDatabase {
       dateLabel: dayRange.label,
       compareDateLabel: compareRange?.label || "",
       isToday,
+      timelineLookbackDays,
       flow,
       compareFlow,
       stageTotals,
