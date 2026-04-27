@@ -49,6 +49,15 @@ function formatQuantity(value) {
   return numeric.toFixed(2).replace(/\.?0+$/, "");
 }
 
+function formatCurrency(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(value || 0));
+}
+
 function formatAgeHours(value) {
   const hours = Number(value || 0);
   if (hours >= 24) {
@@ -359,6 +368,44 @@ function renderCustomerTable(customers, timezone) {
   `;
 }
 
+function renderPendingAsnCustomerTable(report) {
+  const rows = report?.rows || [];
+  if (!rows.length) {
+    return `<div class="empty-state">No pending ASN customer backlog is open right now.</div>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Partner ID</th>
+            <th>Pending Orders</th>
+            <th>Pending Lines</th>
+            <th>Est. Value</th>
+            <th>Oldest</th>
+            <th>Top Ship-To</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.customer_name)}</td>
+              <td>${escapeHtml(row.customer_partner_id || "-")}</td>
+              <td>${escapeHtml(formatNumber(row.pending_orders))}</td>
+              <td>${escapeHtml(formatNumber(row.pending_lines))}</td>
+              <td>${escapeHtml(formatCurrency(row.estimated_value))}</td>
+              <td>${escapeHtml(formatAgeHours(row.oldest_age_hours))}</td>
+              <td>${escapeHtml(row.top_ship_to || "-")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderFolderLoad(folderLoad) {
   if (!folderLoad?.length) {
     return `<div class="empty-state">No folder workload data yet for the selected day.</div>`;
@@ -389,6 +436,9 @@ function renderFolderLoad(folderLoad) {
 function renderSyncPanel(config, serviceState, syncHealth, dayLabel, flashMessage, links) {
   const running = serviceState?.running;
   const currentRun = serviceState?.currentRun || null;
+  const reindexState = serviceState?.reindex || {};
+  const currentReindex = reindexState.currentRun || null;
+  const lastReindex = reindexState.lastRun || null;
   const latestRun = syncHealth?.latestRun || null;
   const returnTo = `/desktop?ops_date=${encodeURIComponent(dayLabel)}`;
   const flash = flashMessage ? `<p class="flash">${escapeHtml(flashMessage)}</p>` : "";
@@ -398,22 +448,34 @@ function renderSyncPanel(config, serviceState, syncHealth, dayLabel, flashMessag
         <span>${escapeHtml(currentRun.message || "Sync running...")}</span>
       </div>`
     : "";
+  const reindexMessage = currentReindex
+    ? `<div class="live-box">
+        <strong>${escapeHtml(currentReindex.phase || "running")}</strong>
+        <span>${escapeHtml(currentReindex.message || "Historical XML repair running...")}</span>
+      </div>`
+    : "";
 
   return `
     <aside class="hero-side">
       <div class="eyebrow">Ops Status</div>
-      <h2>${running ? "Sync running" : "Flow monitor ready"}</h2>
+      <h2>${running ? "Sync running" : (currentReindex ? "Repairing historical XML" : "Flow monitor ready")}</h2>
       <div class="detail-list">
         <div><strong>Remote root</strong><span>${escapeHtml(config.remoteRoot)}</span></div>
         <div><strong>Schedule</strong><span>${escapeHtml(config.schedule)}</span></div>
         <div><strong>Latest run</strong><span>${escapeHtml(latestRun?.status || "No runs yet")}</span></div>
         <div><strong>Last success</strong><span>${escapeHtml(formatDateTime(syncHealth?.latestRun?.finished_at, config.timezone))}</span></div>
+        <div><strong>XML repair</strong><span>${escapeHtml(reindexState.running ? "Running" : (lastReindex?.lastStatus || "Ready"))}</span></div>
+        <div><strong>Last XML repair</strong><span>${escapeHtml(formatDateTime(lastReindex?.lastFinishedAt, config.timezone))}</span></div>
       </div>
       ${liveMessage}
+      ${reindexMessage}
       ${flash}
       <div class="hero-actions">
         <form method="post" action="/sync?return_to=${escapeHtml(returnTo)}">
           <button type="submit"${running ? " disabled" : ""}>Run Sync Now</button>
+        </form>
+        <form method="post" action="${escapeHtml(links.reindexAction || "/reindex-xml")}">
+          <button type="submit" class="secondary"${reindexState.running ? " disabled" : ""}>Repair Old XML Data</button>
         </form>
         <a class="button-link secondary" href="${escapeHtml(links.admin)}">Open Admin Detail</a>
       </div>
@@ -431,6 +493,7 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
     ? ops.kpis.currentHourFiles
     : ops.kpis.peakHourFiles;
   const backlogSummary = ops.backlog?.summary || { awaitingAsn: 0, awaitingReceipt: 0, oldestAgeHours: 0 };
+  const pendingAsnSummary = ops.pendingAsnByCustomer?.summary || { customers: 0, pendingOrders: 0, pendingLines: 0, estimatedValue: 0 };
   const latestRunMessage = ops.syncHealth?.latestRun?.message || "No sync message yet.";
 
   return `<!doctype html>
@@ -907,9 +970,9 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
           ${renderKpiCard("Orders", formatNumber(ops.kpis.orders), formatDelta(ops.kpis.compareOrdersDelta), "good")}
           ${renderKpiCard("ASN", formatNumber(ops.kpis.asn), formatDelta(ops.kpis.compareAsnDelta), ops.kpis.asn >= ops.kpis.orders ? "good" : "")}
           ${renderKpiCard("Receipts", formatNumber(ops.kpis.receipt), formatDelta(ops.kpis.compareReceiptDelta))}
-          ${renderKpiCard("Returns", formatNumber(ops.kpis.returns), "Selected day return volume")}
+          ${renderKpiCard("Pending ASN Orders", formatNumber(ops.kpis.pendingAsnOrders), `${formatNumber(ops.kpis.pendingAsnLines)} pending lines`, ops.kpis.pendingAsnOrders > 0 ? "warn" : "good")}
           ${renderKpiCard(currentOrPeakLabel, formatNumber(currentOrPeakValue), ops.isToday ? "Current selected-hour arrivals" : "Highest hour on selected day")}
-          ${renderKpiCard("Active Folders", formatNumber(ops.kpis.activeFolders), "Folders that received new files")}
+          ${renderKpiCard("Pending ASN Est. Value", formatCurrency(ops.kpis.pendingAsnEstimatedValue), `${formatCurrency(config.orderLineEstimatedValue)} per line workload estimate`, ops.kpis.pendingAsnEstimatedValue > 0 ? "warn" : "good")}
           ${renderKpiCard("Open Backlog", formatNumber(ops.kpis.openBacklog), `${formatNumber(backlogSummary.awaitingAsn)} awaiting ASN, ${formatNumber(backlogSummary.awaitingReceipt)} awaiting receipt`, ops.kpis.openBacklog > 0 ? "warn" : "good")}
           ${renderKpiCard("Oldest Waiting", formatAgeHours(ops.kpis.oldestAgeHours), "Longest unresolved order-flow age", ops.kpis.oldestAgeHours >= 4 ? "warn" : "")}
         </div>
@@ -999,16 +1062,41 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
       <article class="panel">
         <div class="panel-head">
           <div>
+            <div class="eyebrow">Pending ASN</div>
+            <h3>Pending ASN by customer</h3>
+            <p>Orders are matched to ASN by <strong>VBELN</strong>. Estimated value uses <strong>${escapeHtml(formatCurrency(config.orderLineEstimatedValue))} per line</strong>.</p>
+          </div>
+        </div>
+        <div class="summary-strip">
+          <div class="summary-callout">
+            <span>Customers</span>
+            <strong>${escapeHtml(formatNumber(pendingAsnSummary.customers))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Pending Orders</span>
+            <strong>${escapeHtml(formatNumber(pendingAsnSummary.pendingOrders))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Est. Value</span>
+            <strong>${escapeHtml(formatCurrency(pendingAsnSummary.estimatedValue))}</strong>
+          </div>
+        </div>
+        ${renderPendingAsnCustomerTable(ops.pendingAsnByCustomer)}
+      </article>
+    </section>
+
+    <section class="ops-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
             <div class="eyebrow">Customer Load</div>
-            <h3>Who is driving today’s order volume?</h3>
+            <h3>Who is driving today's order volume?</h3>
             <p>Based on parsed order XML for the selected day.</p>
           </div>
         </div>
         ${renderCustomerTable(ops.customerLoad, config.timezone)}
       </article>
-    </section>
 
-    <section class="ops-grid">
       <article class="panel">
         <div class="panel-head">
           <div>
@@ -1019,7 +1107,9 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
         </div>
         ${renderFolderLoad(ops.folderLoad)}
       </article>
+    </section>
 
+    <section style="margin-top:18px">
       <article class="panel">
         <div class="panel-head">
           <div>

@@ -532,7 +532,10 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const asnHourlyReport = dashboard.asnHourlyReport || null;
   const dailyFolderTrend = dashboard.dailyFolderTrend || null;
   const xmlFolderTabs = dashboard.xmlFolderTabs || [];
-  const statusText = serviceState.running ? "Sync running" : "Idle";
+  const reindexState = serviceState.reindex || {};
+  const currentReindex = reindexState.currentRun || null;
+  const lastReindex = reindexState.lastRun || null;
+  const statusText = serviceState.running ? "Sync running" : (reindexState.running ? "Repairing historical XML" : "Idle");
   const currentRun = serviceState.currentRun || null;
   const disableNotice = config.autoSyncEnabled ? "" : `<p class="flash warn">Automatic sync is disabled.</p>`;
   const flash = flashMessage ? `<p class="flash">${escapeHtml(flashMessage)}</p>` : "";
@@ -553,7 +556,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
   const trendDateLabel = trend.date || "";
   const xmlDocumentCount = xmlFolderTabs.reduce((sum, folder) => sum + (Number(folder.total_documents) || 0), 0);
 
-  const autoRefreshScript = serviceState.running ? `
+  const autoRefreshScript = (serviceState.running || reindexState.running) ? `
   <script>
     (function () {
       var seconds = 5;
@@ -599,10 +602,13 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
     }());
   </script>`;
 
-  const liveProgress = currentRun ? `
+  const refreshBanner = (serviceState.running || reindexState.running) ? `
     <div class="flash" style="margin-top:16px">
-      Auto-refreshing in <strong id="refresh-countdown">5</strong> seconds while this sync is running.
+      Auto-refreshing in <strong id="refresh-countdown">5</strong> seconds while background work is running.
     </div>
+  ` : "";
+
+  const liveProgress = currentRun ? `
     <div class="status-grid">
       <div class="status-tile"><span>Phase</span><strong>${escapeHtml(currentRun.phase || "running")}</strong></div>
       <div class="status-tile"><span>Progress</span><strong>${escapeHtml(currentRun.percentComplete || 0)}%</strong></div>
@@ -622,6 +628,33 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       <div><strong>Live message</strong><span>${escapeHtml(currentRun.message || "-")}</span></div>
     </div>
   ` : "";
+
+  const reindexProgress = currentReindex ? `
+    <div class="flash" style="margin-top:16px">
+      Historical XML repair is running${serviceState.running ? " alongside the sync" : ""}. Existing snapshots are being re-parsed with the latest SAP field mapping.
+    </div>
+    <div class="status-grid">
+      <div class="status-tile"><span>Repair Phase</span><strong>${escapeHtml(currentReindex.phase || "running")}</strong></div>
+      <div class="status-tile"><span>Repair Progress</span><strong>${escapeHtml(currentReindex.percentComplete || 0)}%</strong></div>
+      <div class="status-tile"><span>Total XML</span><strong>${escapeHtml(currentReindex.totalSnapshots || 0)}</strong></div>
+      <div class="status-tile"><span>Processed</span><strong>${escapeHtml(currentReindex.processedSnapshots || 0)}</strong></div>
+      <div class="status-tile"><span>Successful</span><strong>${escapeHtml(currentReindex.successfulSnapshots || 0)}</strong></div>
+      <div class="status-tile"><span>Failed</span><strong>${escapeHtml(currentReindex.failedSnapshots || 0)}</strong></div>
+    </div>
+    <div class="progress-track" aria-label="Historical XML repair progress">
+      <div class="progress-fill" style="width:${escapeHtml(currentReindex.percentComplete || 0)}%"></div>
+    </div>
+    <div class="detail-list" style="margin-top:14px">
+      <div><strong>Repair started</strong><span>${escapeHtml(formatDateTime(currentReindex.startedAt, config.timezone))}</span></div>
+      <div><strong>Current XML path</strong><span>${escapeHtml(currentReindex.currentPath || "-")}</span></div>
+      <div><strong>Last repaired path</strong><span>${escapeHtml(currentReindex.lastCompletedPath || "-")}</span></div>
+      <div><strong>Last parse status</strong><span>${escapeHtml(currentReindex.lastParseStatus || "-")}</span></div>
+      <div><strong>Repair message</strong><span>${escapeHtml(currentReindex.message || "-")}</span></div>
+    </div>
+  ` : "";
+  const reindexNote = !currentReindex && lastReindex?.lastMessage
+    ? `<p class="meta" style="margin-top:0.75rem"><strong>Last XML repair:</strong> ${escapeHtml(lastReindex.lastMessage)}</p>`
+    : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -805,7 +838,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       font-weight: 700;
     }
 
-    .button-link.secondary {
+    .button-link.secondary, button.secondary {
       background: var(--panel-2);
       color: var(--text);
       border: 1px solid var(--line);
@@ -1618,14 +1651,22 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <div><strong>Alerts</strong><span>${escapeHtml(alertsLabel)}</span></div>
           <div><strong>Snapshot retention</strong><span>${escapeHtml(retentionLabel)}</span></div>
           <div><strong>Activity page size</strong><span>${escapeHtml(config.activityPageSize)}</span></div>
-        </div>
+        <div><strong>XML repair</strong><span>${escapeHtml(reindexState.running ? "Running" : (lastReindex?.lastStatus || "Ready"))}</span></div>
+        <div><strong>Last XML repair</strong><span>${escapeHtml(formatDateTime(lastReindex?.lastFinishedAt, config.timezone))}</span></div>
+      </div>
+        ${refreshBanner}
         ${liveProgress}
+        ${reindexProgress}
+        ${reindexNote}
         ${disableNotice}
         ${flash}
         ${queuedNotice}
         <div class="button-row" style="margin-top:1rem">
           <form method="post" action="${escapeHtml(links.syncAction || "/sync")}">
             <button type="submit"${serviceState.running ? " disabled" : ""}>Run Sync Now</button>
+          </form>
+          <form method="post" action="${escapeHtml(links.reindexAction || "/reindex-xml")}">
+            <button type="submit" class="secondary"${reindexState.running ? " disabled" : ""}>Repair Old XML Data</button>
           </form>
           <a class="button-link secondary" href="${escapeHtml(links.runsCsv)}">Export Runs CSV</a>
         </div>
@@ -1656,7 +1697,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
       </summary>
       <div class="accordion-body">
         <p class="meta">Filter the audit trail and export only the slice you need.</p>
-        <form class="filters" method="get" action="/">
+        <form class="filters" method="get" action="${escapeHtml(links.currentPath || "/admin")}">
           <label>
             Search
             <input type="text" name="q" value="${escapeHtml(filters.q || "")}" placeholder="File or path">
@@ -1689,7 +1730,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           </label>
           <div class="filter-actions">
             <button type="submit">Apply Filters</button>
-            <a class="button-link secondary" href="/">Clear</a>
+            <a class="button-link secondary" href="${escapeHtml(links.currentPath || "/admin")}">Clear</a>
             <a class="button-link secondary" href="${escapeHtml(links.activityCsv)}">Export Activity CSV</a>
           </div>
         </form>
@@ -1714,7 +1755,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <div class="form-copy">
             <p class="meta">A per-day intake board that shows which folders grew, how many fresh files landed there, and how much data was added.</p>
           </div>
-          <form class="intake-controls" method="get" action="/">
+          <form class="intake-controls" method="get" action="${escapeHtml(links.currentPath || "/admin")}">
             ${renderHiddenFilterInputs(filters, { includeAsnDate: true, includeTrendDate: true, includeTrendDays: true })}
             <label>
               Selected Day
@@ -1751,7 +1792,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <div class="form-copy">
             <p class="meta">A rolling bar-chart view that shows how many new files each folder received on each day in the selected window.</p>
           </div>
-          <form class="intake-controls" method="get" action="/">
+          <form class="intake-controls" method="get" action="${escapeHtml(links.currentPath || "/admin")}">
             ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeAsnDate: true })}
             <label>
               End Day
@@ -1793,7 +1834,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
           <div class="form-copy">
             <p class="meta">Track how many new ASN confirmation files landed in ${escapeHtml(config.asnReportFolder)} each hour of the selected day.</p>
           </div>
-          <form class="intake-controls" method="get" action="/">
+          <form class="intake-controls" method="get" action="${escapeHtml(links.currentPath || "/admin")}">
             ${renderHiddenFilterInputs(filters, { includeIntakeDate: true, includeTrendDate: true, includeTrendDays: true })}
             <label>
               ASN Day

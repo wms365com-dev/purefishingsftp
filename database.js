@@ -60,10 +60,17 @@ function classifyOpsStage(folderPath) {
 }
 
 function buildDocumentKey(row) {
-  const rawValue = row.order_number || row.record_key || String(row.file_name || "").replace(/\.[^.]+$/, "") || row.remote_path;
+  const rawValue = row.vbeln || row.order_number || row.record_key || String(row.file_name || "").replace(/\.[^.]+$/, "") || row.remote_path;
   return String(rawValue || "")
     .trim()
     .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function buildCustomerGroupKey(row) {
+  return String(row.customer_partner_id || row.customer_name || "unknown")
+    .trim()
+    .replace(/\s+/g, " ")
     .toLowerCase();
 }
 
@@ -152,10 +159,14 @@ class MirrorDatabase {
         file_name TEXT NOT NULL,
         snapshot_path TEXT NOT NULL UNIQUE,
         document_type TEXT,
+        vbeln TEXT,
         record_key TEXT,
         order_number TEXT,
         order_date TEXT,
+        customer_partner_id TEXT,
         ship_to TEXT,
+        ship_to_partner_id TEXT,
+        ship_to_name TEXT,
         customer_name TEXT,
         item_count INTEGER NOT NULL DEFAULT 0,
         total_qty REAL NOT NULL DEFAULT 0,
@@ -179,6 +190,12 @@ class MirrorDatabase {
         FOREIGN KEY (document_id) REFERENCES xml_documents(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_file_events_event_at ON file_events(event_at DESC);
       CREATE INDEX IF NOT EXISTS idx_file_events_event_type ON file_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_file_events_folder_path ON file_events(folder_path);
@@ -187,12 +204,17 @@ class MirrorDatabase {
       CREATE INDEX IF NOT EXISTS idx_xml_documents_folder_path ON xml_documents(folder_path);
       CREATE INDEX IF NOT EXISTS idx_xml_documents_parsed_at ON xml_documents(parsed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_xml_documents_parse_status ON xml_documents(parse_status);
+      CREATE INDEX IF NOT EXISTS idx_xml_documents_vbeln ON xml_documents(vbeln);
       CREATE INDEX IF NOT EXISTS idx_xml_document_items_document_id ON xml_document_items(document_id);
     `);
 
     this.ensureColumn("known_files", "file_name", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("known_files", "checksum", "TEXT");
     this.ensureColumn("sync_runs", "deleted_files", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("xml_documents", "vbeln", "TEXT");
+    this.ensureColumn("xml_documents", "customer_partner_id", "TEXT");
+    this.ensureColumn("xml_documents", "ship_to_partner_id", "TEXT");
+    this.ensureColumn("xml_documents", "ship_to_name", "TEXT");
   }
 
   ensureColumn(tableName, columnName, definition) {
@@ -449,10 +471,14 @@ class MirrorDatabase {
         remote_path,
         file_name,
         document_type,
+        vbeln,
         record_key,
         order_number,
         order_date,
+        customer_partner_id,
         ship_to,
+        ship_to_partner_id,
+        ship_to_name,
         customer_name,
         item_count,
         total_qty
@@ -471,10 +497,14 @@ class MirrorDatabase {
         remote_path,
         file_name,
         document_type,
+        vbeln,
         record_key,
         order_number,
         order_date,
+        customer_partner_id,
         ship_to,
+        ship_to_partner_id,
+        ship_to_name,
         customer_name,
         item_count,
         total_qty
@@ -502,10 +532,14 @@ class MirrorDatabase {
         file_name,
         snapshot_path,
         document_type,
+        vbeln,
         record_key,
         order_number,
         order_date,
+        customer_partner_id,
         ship_to,
+        ship_to_partner_id,
+        ship_to_name,
         customer_name,
         item_count,
         total_qty,
@@ -513,7 +547,7 @@ class MirrorDatabase {
         parse_status,
         parse_message,
         parsed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(snapshot_path) DO UPDATE SET
         file_event_id = excluded.file_event_id,
         run_id = excluded.run_id,
@@ -521,10 +555,14 @@ class MirrorDatabase {
         remote_path = excluded.remote_path,
         file_name = excluded.file_name,
         document_type = excluded.document_type,
+        vbeln = excluded.vbeln,
         record_key = excluded.record_key,
         order_number = excluded.order_number,
         order_date = excluded.order_date,
+        customer_partner_id = excluded.customer_partner_id,
         ship_to = excluded.ship_to,
+        ship_to_partner_id = excluded.ship_to_partner_id,
+        ship_to_name = excluded.ship_to_name,
         customer_name = excluded.customer_name,
         item_count = excluded.item_count,
         total_qty = excluded.total_qty,
@@ -576,10 +614,14 @@ class MirrorDatabase {
         file_name,
         snapshot_path,
         document_type,
+        vbeln,
         record_key,
         order_number,
         order_date,
+        customer_partner_id,
         ship_to,
+        ship_to_partner_id,
+        ship_to_name,
         customer_name,
         item_count,
         total_qty,
@@ -624,6 +666,57 @@ class MirrorDatabase {
         message
       FROM file_events
       WHERE id = ?
+    `);
+
+    this.historicalXmlSnapshotCountStmt = this.db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM (
+        SELECT snapshot_path
+        FROM file_events
+        WHERE snapshot_path IS NOT NULL AND LOWER(file_name) LIKE '%.xml'
+        GROUP BY snapshot_path
+      )
+    `);
+
+    this.historicalXmlSnapshotsStmt = this.db.prepare(`
+      SELECT
+        fe.id AS file_event_id,
+        fe.run_id,
+        fe.folder_path,
+        fe.remote_path,
+        fe.file_name,
+        fe.snapshot_path
+      FROM file_events fe
+      INNER JOIN (
+        SELECT snapshot_path, MAX(id) AS max_id
+        FROM file_events
+        WHERE snapshot_path IS NOT NULL AND LOWER(file_name) LIKE '%.xml'
+        GROUP BY snapshot_path
+      ) latest ON latest.max_id = fe.id
+      ORDER BY fe.id ASC
+    `);
+
+    this.appStateValueStmt = this.db.prepare(`
+      SELECT value
+      FROM app_state
+      WHERE key = ?
+    `);
+
+    this.xmlReindexStateRowsStmt = this.db.prepare(`
+      SELECT key, value, updated_at
+      FROM app_state
+      WHERE key LIKE 'xml_reindex_%' OR key = 'xml_index_version'
+    `);
+
+    this.upsertAppStateStmt = this.db.prepare(`
+      INSERT INTO app_state (
+        key,
+        value,
+        updated_at
+      ) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at
     `);
   }
 
@@ -773,6 +866,7 @@ class MirrorDatabase {
     const timezone = options.timezone || "America/New_York";
     const dayRange = options.dayRange;
     const compareRange = options.compareRange || null;
+    const estimatedLineValue = Math.max(Number(options.estimatedLineValue || 0), 0);
 
     if (!dayRange) {
       return null;
@@ -800,6 +894,7 @@ class MirrorDatabase {
     const customerLoad = this.buildCustomerLoad(dayDocuments);
     const timeline = this.buildOrderTimeline(timelineDocuments);
     const backlog = this.buildBacklog(timeline, referenceIso);
+    const pendingAsnByCustomer = this.buildPendingAsnByCustomer(timeline, referenceIso, estimatedLineValue);
     const hourNow = isToday ? getLocalHourOfDay(new Date().toISOString(), timezone) : null;
     const currentHourRow = hourNow === null ? null : flow.rows[hourNow];
     const peakHour = flow.summary.peakHourLabel
@@ -825,6 +920,7 @@ class MirrorDatabase {
       folderLoad,
       customerLoad,
       backlog,
+      pendingAsnByCustomer,
       syncHealth,
       kpis: {
         totalNewFiles: flow.summary.totalFiles,
@@ -835,6 +931,9 @@ class MirrorDatabase {
         activeFolders: flow.summary.activeFolders,
         openBacklog: backlog.summary.awaitingAsn + backlog.summary.awaitingReceipt,
         oldestAgeHours: backlog.summary.oldestAgeHours,
+        pendingAsnOrders: pendingAsnByCustomer.summary.pendingOrders,
+        pendingAsnLines: pendingAsnByCustomer.summary.pendingLines,
+        pendingAsnEstimatedValue: pendingAsnByCustomer.summary.estimatedValue,
         currentHourFiles: currentHourRow?.total || 0,
         currentHourLabel: currentHourRow?.hour_label || "",
         peakHourFiles: peakHour?.total || 0,
@@ -916,6 +1015,112 @@ class MirrorDatabase {
     return this.fileEventIdBySnapshotPathStmt.get(snapshotPath)?.id || null;
   }
 
+  countHistoricalXmlSnapshots() {
+    return Number(this.historicalXmlSnapshotCountStmt.get()?.total || 0);
+  }
+
+  listHistoricalXmlSnapshots() {
+    return this.historicalXmlSnapshotsStmt.all();
+  }
+
+  getAppStateValue(key) {
+    return this.appStateValueStmt.get(key)?.value || "";
+  }
+
+  setAppStateValue(key, value, updatedAt = new Date().toISOString()) {
+    this.upsertAppStateStmt.run(key, value === undefined || value === null ? "" : String(value), updatedAt);
+  }
+
+  getXmlReindexState() {
+    const state = {
+      version: "",
+      lastStatus: "",
+      lastMessage: "",
+      lastStartedAt: "",
+      lastFinishedAt: "",
+      lastProcessedSnapshots: 0,
+      lastSuccessfulSnapshots: 0,
+      lastFailedSnapshots: 0
+    };
+    const rows = this.xmlReindexStateRowsStmt.all();
+
+    for (const row of rows) {
+      switch (row.key) {
+        case "xml_index_version":
+          state.version = row.value || "";
+          break;
+        case "xml_reindex_last_status":
+          state.lastStatus = row.value || "";
+          break;
+        case "xml_reindex_last_message":
+          state.lastMessage = row.value || "";
+          break;
+        case "xml_reindex_last_started_at":
+          state.lastStartedAt = row.value || "";
+          break;
+        case "xml_reindex_last_finished_at":
+          state.lastFinishedAt = row.value || "";
+          break;
+        case "xml_reindex_last_processed":
+          state.lastProcessedSnapshots = Number(row.value || 0);
+          break;
+        case "xml_reindex_last_success":
+          state.lastSuccessfulSnapshots = Number(row.value || 0);
+          break;
+        case "xml_reindex_last_failed":
+          state.lastFailedSnapshots = Number(row.value || 0);
+          break;
+        default:
+          break;
+      }
+    }
+
+    return state;
+  }
+
+  setXmlReindexState(state = {}) {
+    const updatedAt = state.updatedAt || new Date().toISOString();
+    this.db.exec("BEGIN");
+
+    try {
+      const entries = [
+        ["xml_index_version", state.version],
+        ["xml_reindex_last_status", state.lastStatus],
+        ["xml_reindex_last_message", state.lastMessage],
+        ["xml_reindex_last_started_at", state.lastStartedAt],
+        ["xml_reindex_last_finished_at", state.lastFinishedAt],
+        ["xml_reindex_last_processed", state.lastProcessedSnapshots],
+        ["xml_reindex_last_success", state.lastSuccessfulSnapshots],
+        ["xml_reindex_last_failed", state.lastFailedSnapshots]
+      ];
+
+      for (const [key, value] of entries) {
+        if (value === undefined) {
+          continue;
+        }
+
+        this.upsertAppStateStmt.run(key, value === null ? "" : String(value), updatedAt);
+      }
+
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  shouldRunHistoricalXmlReindex(targetVersion) {
+    if (!targetVersion) {
+      return false;
+    }
+
+    if (this.countHistoricalXmlSnapshots() === 0) {
+      return false;
+    }
+
+    return this.getXmlReindexState().version !== targetVersion;
+  }
+
   upsertXmlDocument(document) {
     this.db.exec("BEGIN");
 
@@ -928,10 +1133,14 @@ class MirrorDatabase {
         document.fileName,
         document.snapshotPath,
         document.documentType,
+        document.vbeln,
         document.recordKey,
         document.orderNumber,
         document.orderDate,
+        document.customerPartnerId,
         document.shipTo,
+        document.shipToPartnerId,
+        document.shipToName,
         document.customerName,
         document.itemCount,
         document.totalQty,
@@ -1239,8 +1448,10 @@ class MirrorDatabase {
         continue;
       }
 
+      const customerKey = buildCustomerGroupKey(document);
       const customerName = document.customer_name || "Unknown customer";
-      const existing = customers.get(customerName) || {
+      const existing = customers.get(customerKey) || {
+        customer_partner_id: document.customer_partner_id || "",
         customer_name: customerName,
         order_count: 0,
         total_qty: 0,
@@ -1258,11 +1469,12 @@ class MirrorDatabase {
       }
       existing.ship_to_count = existing.shipTos.size;
       existing.last_parsed_at = document.parsed_at;
-      customers.set(customerName, existing);
+      customers.set(customerKey, existing);
     }
 
     return Array.from(customers.values())
       .map((customer) => ({
+        customer_partner_id: customer.customer_partner_id,
         customer_name: customer.customer_name,
         order_count: customer.order_count,
         total_qty: customer.total_qty,
@@ -1290,8 +1502,12 @@ class MirrorDatabase {
 
       const existing = timeline.get(documentKey) || {
         document_key: documentKey,
-        display_key: document.order_number || document.record_key || document.file_name || document.remote_path,
+        display_key: document.vbeln || document.order_number || document.record_key || document.file_name || document.remote_path,
+        vbeln: document.vbeln || document.order_number || "",
+        customer_partner_id: document.customer_partner_id || "",
         customer_name: document.customer_name || "",
+        ship_to_partner_id: document.ship_to_partner_id || "",
+        ship_to_name: document.ship_to_name || "",
         ship_to: document.ship_to || "",
         order_date: document.order_date || "",
         item_count: Number(document.item_count || 0),
@@ -1304,6 +1520,18 @@ class MirrorDatabase {
 
       if (!existing.customer_name && document.customer_name) {
         existing.customer_name = document.customer_name;
+      }
+
+      if (!existing.customer_partner_id && document.customer_partner_id) {
+        existing.customer_partner_id = document.customer_partner_id;
+      }
+
+      if (!existing.ship_to_partner_id && document.ship_to_partner_id) {
+        existing.ship_to_partner_id = document.ship_to_partner_id;
+      }
+
+      if (!existing.ship_to_name && document.ship_to_name) {
+        existing.ship_to_name = document.ship_to_name;
       }
 
       if (!existing.ship_to && document.ship_to) {
@@ -1366,6 +1594,9 @@ class MirrorDatabase {
     return {
       display_key: entry.display_key,
       customer_name: entry.customer_name || "Unknown customer",
+      customer_partner_id: entry.customer_partner_id || "",
+      ship_to_partner_id: entry.ship_to_partner_id || "",
+      ship_to_name: entry.ship_to_name || "",
       ship_to: entry.ship_to || "",
       order_date: entry.order_date || "",
       status_label: statusLabel,
@@ -1373,6 +1604,77 @@ class MirrorDatabase {
       ageHours,
       item_count: entry.item_count,
       total_qty: entry.total_qty
+    };
+  }
+
+  buildPendingAsnByCustomer(timeline, referenceIso, estimatedLineValue) {
+    const referenceMs = new Date(referenceIso).getTime();
+    const customers = new Map();
+
+    for (const entry of timeline) {
+      if (!entry.orders_at || entry.asn_at) {
+        continue;
+      }
+
+      const pendingLines = Math.max(1, Number(entry.item_count || 0));
+      const estimatedValue = pendingLines * estimatedLineValue;
+      const customerKey = buildCustomerGroupKey(entry);
+      const existing = customers.get(customerKey) || {
+        customer_partner_id: entry.customer_partner_id || "",
+        customer_name: entry.customer_name || "Unknown customer",
+        pending_orders: 0,
+        pending_lines: 0,
+        pending_qty: 0,
+        estimated_value: 0,
+        oldest_age_hours: 0,
+        oldest_started_at: entry.orders_at,
+        top_ship_to: "",
+        shipToCounts: new Map()
+      };
+
+      existing.pending_orders += 1;
+      existing.pending_lines += pendingLines;
+      existing.pending_qty += Number(entry.total_qty || 0);
+      existing.estimated_value += estimatedValue;
+
+      const ageHours = Math.max(0, (referenceMs - new Date(entry.orders_at).getTime()) / (60 * 60 * 1000));
+      if (ageHours > existing.oldest_age_hours) {
+        existing.oldest_age_hours = ageHours;
+        existing.oldest_started_at = entry.orders_at;
+      }
+
+      const shipToLabel = entry.ship_to_name || entry.ship_to || "Unknown ship-to";
+      existing.shipToCounts.set(shipToLabel, (existing.shipToCounts.get(shipToLabel) || 0) + 1);
+      customers.set(customerKey, existing);
+    }
+
+    const rows = Array.from(customers.values())
+      .map((customer) => {
+        const topShipTo = Array.from(customer.shipToCounts.entries())
+          .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || "";
+
+        return {
+          customer_partner_id: customer.customer_partner_id,
+          customer_name: customer.customer_name,
+          pending_orders: customer.pending_orders,
+          pending_lines: customer.pending_lines,
+          pending_qty: customer.pending_qty,
+          estimated_value: customer.estimated_value,
+          oldest_age_hours: customer.oldest_age_hours,
+          oldest_started_at: customer.oldest_started_at,
+          top_ship_to: topShipTo
+        };
+      })
+      .sort((left, right) => right.estimated_value - left.estimated_value || right.pending_orders - left.pending_orders || left.customer_name.localeCompare(right.customer_name));
+
+    return {
+      rows: rows.slice(0, 12),
+      summary: {
+        customers: rows.length,
+        pendingOrders: rows.reduce((sum, row) => sum + row.pending_orders, 0),
+        pendingLines: rows.reduce((sum, row) => sum + row.pending_lines, 0),
+        estimatedValue: rows.reduce((sum, row) => sum + row.estimated_value, 0)
+      }
     };
   }
 

@@ -5,6 +5,11 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseDecimal(value, fallback) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function parseBoundedNumber(value, fallback, minimum, maximum) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) {
@@ -226,6 +231,7 @@ function loadConfig() {
     activityPageSize: Math.min(Math.max(parseNumber(process.env.ACTIVITY_PAGE_SIZE, 50), 10), 250),
     snapshotRetentionDays: Math.max(parseNumber(process.env.SNAPSHOT_RETENTION_DAYS, 0), 0),
     asnReportFolder: normalizeRemoteRoot(process.env.ASN_REPORT_FOLDER || "/BlueDog/ASN/Production"),
+    orderLineEstimatedValue: Math.max(parseDecimal(process.env.ORDER_LINE_ESTIMATED_VALUE, 3.5), 0),
     schedule: resolveSchedule(),
     alerts: {
       webhookUrl: process.env.ALERT_WEBHOOK_URL || "",
@@ -295,6 +301,7 @@ function getPublicConfig(config) {
     sftpReadyTimeoutMs: config.sftp.readyTimeoutMs,
     sftpConnectRetries: config.sftp.connectRetries,
     asnReportFolder: config.asnReportFolder,
+    orderLineEstimatedValue: config.orderLineEstimatedValue,
     authMode: config.sftp.privateKey ? "private key" : "password"
   };
 }

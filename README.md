@@ -7,6 +7,7 @@ It also includes:
 - A built-in scheduler that can run Monday through Friday just before each top-of-hour pull window, or on a fixed minute schedule if you prefer the older behavior.
 - A dashboard showing recent sync runs, total file counts by folder, and searchable file activity.
 - Automatic XML indexing for downloaded snapshots, with parsed order/customer/ship-to/item details stored in SQLite.
+- Automatic historical XML repair when the XML parser schema changes, plus a manual "Repair Old XML Data" action in the dashboard.
 - Per-file audit history for new, changed, unchanged, and deleted files.
 - CSV exports for file activity and sync runs.
 - Optional webhook and SMTP email alerts for failures, activity, and daily summaries.
@@ -62,6 +63,7 @@ Optional general settings:
 - `SFTP_PASSPHRASE=`
 - `APP_TIMEZONE=America/New_York`
 - `ASN_REPORT_FOLDER=/BlueDog/ASN/Production`
+- `ORDER_LINE_ESTIMATED_VALUE=3.5`
 - `AUTO_SYNC_ENABLED=true`
 - `SYNC_TARGET_START_HOUR=8`
 - `SYNC_TARGET_END_HOUR=17`
@@ -151,6 +153,7 @@ Then open `http://localhost:3000`.
 - For top-of-hour capture windows, set `SYNC_TARGET_START_HOUR`, `SYNC_TARGET_END_HOUR`, and `SYNC_LEAD_MINUTES`. Example: `8`, `17`, and `1` runs at `7:59`, `8:59`, ..., `16:59` to capture the `8:00 AM` through `5:00 PM` hourly boundary.
 - If the SFTP server is slow to answer from Railway, increase `SFTP_READY_TIMEOUT_MS` to `60000`. The service now retries connection-level timeouts by default before failing a run.
 - If a scheduled slot happens while a sync is still running, the service now queues one follow-up scheduled sync to start immediately after the current run completes.
+- Historical XML snapshots are automatically re-indexed once after deploy when the parser version changes, so legacy rows can be repaired with the latest SAP field mapping.
 - If you prefer the older fixed-minute pattern, omit the `SYNC_TARGET_*` variables and use `SYNC_START_HOUR`, `SYNC_END_HOUR`, and `SYNC_MINUTE`.
 - Remote deletions are logged into the audit trail and removed from the current tracked set.
 - Retention cleanup is disabled by default until you set `SNAPSHOT_RETENTION_DAYS`.

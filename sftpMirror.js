@@ -6,6 +6,8 @@ const pathPosix = require("node:path/posix");
 const SftpClient = require("ssh2-sftp-client");
 const { parseXmlSnapshot } = require("./xmlProcessor");
 
+const XML_REINDEX_VERSION = "sap-vbeln-v1";
+
 function toIsoString(date = new Date()) {
   return date.toISOString();
 }
@@ -127,14 +129,77 @@ class SftpMirrorService {
     this.runningPromise = null;
     this.runningContext = null;
     this.queuedTriggerSource = null;
+    this.reindexPromise = null;
+    this.reindexContext = null;
+    this.lastReindexResult = this.database.getXmlReindexState();
   }
 
   getState() {
     return {
       running: Boolean(this.runningPromise),
       currentRun: this.runningContext,
-      queuedTriggerSource: this.queuedTriggerSource
+      queuedTriggerSource: this.queuedTriggerSource,
+      reindex: {
+        running: Boolean(this.reindexPromise),
+        currentRun: this.reindexContext,
+        lastRun: this.lastReindexResult,
+        targetVersion: XML_REINDEX_VERSION
+      }
     };
+  }
+
+  startHistoricalXmlReindexIfNeeded(triggerSource = "startup") {
+    if (!this.database.shouldRunHistoricalXmlReindex(XML_REINDEX_VERSION)) {
+      return false;
+    }
+
+    return this.startHistoricalXmlReindex(triggerSource);
+  }
+
+  startHistoricalXmlReindex(triggerSource = "manual") {
+    if (this.reindexPromise) {
+      return false;
+    }
+
+    const startedAt = toIsoString();
+    const totalSnapshots = this.database.countHistoricalXmlSnapshots();
+    this.reindexContext = {
+      triggerSource,
+      startedAt,
+      phase: "queued",
+      totalSnapshots,
+      processedSnapshots: 0,
+      successfulSnapshots: 0,
+      failedSnapshots: 0,
+      percentComplete: 0,
+      currentPath: "",
+      lastCompletedPath: "",
+      lastParseStatus: "",
+      message: totalSnapshots
+        ? `Queued historical XML repair for ${totalSnapshots} snapshot(s).`
+        : "Queued historical XML repair."
+    };
+    this.database.setXmlReindexState({
+      lastStatus: "running",
+      lastMessage: `Historical XML repair started (${triggerSource}).`,
+      lastStartedAt: startedAt,
+      lastFinishedAt: "",
+      lastProcessedSnapshots: 0,
+      lastSuccessfulSnapshots: 0,
+      lastFailedSnapshots: 0,
+      updatedAt: startedAt
+    });
+    this.lastReindexResult = this.database.getXmlReindexState();
+    this.reindexPromise = this.runHistoricalXmlReindex(triggerSource, startedAt)
+      .catch((error) => {
+        this.logger.error("Historical XML reindex failed:", error);
+      })
+      .finally(() => {
+        this.reindexPromise = null;
+        this.reindexContext = null;
+      });
+
+    return true;
   }
 
   startBackgroundSync(triggerSource) {
@@ -553,6 +618,158 @@ class SftpMirrorService {
     return { prunedSnapshotFolders };
   }
 
+  async runHistoricalXmlReindex(triggerSource, startedAt) {
+    const snapshots = this.database.listHistoricalXmlSnapshots();
+    const progress = {
+      triggerSource,
+      startedAt,
+      phase: "starting",
+      totalSnapshots: snapshots.length,
+      processedSnapshots: 0,
+      successfulSnapshots: 0,
+      failedSnapshots: 0,
+      percentComplete: 1,
+      currentPath: "",
+      lastCompletedPath: "",
+      lastParseStatus: "",
+      message: snapshots.length
+        ? `Preparing historical XML repair for ${snapshots.length} snapshot(s)...`
+        : "No historical XML snapshots were found to repair."
+    };
+
+    try {
+      if (!snapshots.length) {
+        const finishedAt = toIsoString();
+        const message = "Historical XML repair found no XML snapshots to process.";
+        this.database.setXmlReindexState({
+          version: XML_REINDEX_VERSION,
+          lastStatus: "success",
+          lastMessage: message,
+          lastStartedAt: startedAt,
+          lastFinishedAt: finishedAt,
+          lastProcessedSnapshots: 0,
+          lastSuccessfulSnapshots: 0,
+          lastFailedSnapshots: 0,
+          updatedAt: finishedAt
+        });
+        this.lastReindexResult = this.database.getXmlReindexState();
+        return this.lastReindexResult;
+      }
+
+      for (let index = 0; index < snapshots.length; index += 1) {
+        const snapshot = snapshots[index];
+        this.updateReindexProgress(progress, {
+          phase: "indexing",
+          currentPath: snapshot.remote_path,
+          message: `Repairing XML ${index + 1} of ${snapshots.length}: ${snapshot.file_name}`
+        });
+
+        const parsed = await parseXmlSnapshot(snapshot.snapshot_path, {
+          fileName: snapshot.file_name,
+          remotePath: snapshot.remote_path,
+          folderPath: snapshot.folder_path
+        });
+
+        this.database.upsertXmlDocument({
+          fileEventId: snapshot.file_event_id,
+          runId: snapshot.run_id,
+          folderPath: snapshot.folder_path,
+          remotePath: snapshot.remote_path,
+          fileName: snapshot.file_name,
+          snapshotPath: snapshot.snapshot_path,
+          documentType: parsed.documentType,
+          vbeln: parsed.vbeln,
+          recordKey: parsed.recordKey,
+          orderNumber: parsed.orderNumber,
+          orderDate: parsed.orderDate,
+          customerPartnerId: parsed.customerPartnerId,
+          shipTo: parsed.shipTo,
+          shipToPartnerId: parsed.shipToPartnerId,
+          shipToName: parsed.shipToName,
+          customerName: parsed.customerName,
+          itemCount: parsed.itemCount,
+          totalQty: parsed.totalQty,
+          itemPreview: parsed.itemPreview,
+          parseStatus: parsed.parseStatus,
+          parseMessage: parsed.parseMessage,
+          parsedAt: parsed.parsedAt,
+          items: parsed.items
+        });
+
+        this.updateReindexProgress(progress, {
+          processedSnapshots: progress.processedSnapshots + 1,
+          successfulSnapshots: progress.successfulSnapshots + (parsed.parseStatus === "success" ? 1 : 0),
+          failedSnapshots: progress.failedSnapshots + (parsed.parseStatus === "success" ? 0 : 1),
+          lastCompletedPath: snapshot.remote_path,
+          lastParseStatus: parsed.parseStatus,
+          message: `Repaired ${progress.processedSnapshots + 1} of ${snapshots.length} historical XML snapshot(s).`
+        });
+      }
+
+      const finishedAt = toIsoString();
+      const message = `Historical XML repair complete. ${progress.successfulSnapshots} successful, ${progress.failedSnapshots} failed across ${progress.processedSnapshots} snapshot(s).`;
+      this.updateReindexProgress(progress, {
+        phase: "complete",
+        percentComplete: 100,
+        message
+      });
+      this.database.setXmlReindexState({
+        version: XML_REINDEX_VERSION,
+        lastStatus: "success",
+        lastMessage: message,
+        lastStartedAt: startedAt,
+        lastFinishedAt: finishedAt,
+        lastProcessedSnapshots: progress.processedSnapshots,
+        lastSuccessfulSnapshots: progress.successfulSnapshots,
+        lastFailedSnapshots: progress.failedSnapshots,
+        updatedAt: finishedAt
+      });
+      this.lastReindexResult = this.database.getXmlReindexState();
+      return this.lastReindexResult;
+    } catch (error) {
+      const finishedAt = toIsoString();
+      const message = `Historical XML repair failed after ${progress.processedSnapshots} snapshot(s): ${error.message}`;
+      this.updateReindexProgress(progress, {
+        phase: "failed",
+        message
+      });
+      this.database.setXmlReindexState({
+        lastStatus: "failed",
+        lastMessage: message,
+        lastStartedAt: startedAt,
+        lastFinishedAt: finishedAt,
+        lastProcessedSnapshots: progress.processedSnapshots,
+        lastSuccessfulSnapshots: progress.successfulSnapshots,
+        lastFailedSnapshots: progress.failedSnapshots,
+        updatedAt: finishedAt
+      });
+      this.lastReindexResult = this.database.getXmlReindexState();
+      throw error;
+    }
+  }
+
+  updateReindexProgress(progress, patch) {
+    Object.assign(progress, patch);
+
+    if (progress.phase === "queued") {
+      progress.percentComplete = 0;
+    } else if (progress.phase === "starting") {
+      progress.percentComplete = Math.max(progress.percentComplete || 0, 1);
+    } else if (progress.phase === "indexing") {
+      const totalSnapshots = Math.max(progress.totalSnapshots || 0, 1);
+      progress.percentComplete = Math.max(
+        2,
+        Math.min(99, Math.round((progress.processedSnapshots / totalSnapshots) * 100))
+      );
+    } else if (progress.phase === "complete") {
+      progress.percentComplete = 100;
+    } else if (progress.phase === "failed") {
+      progress.percentComplete = Math.min(progress.percentComplete || 0, 99);
+    }
+
+    this.reindexContext = { ...progress };
+  }
+
   updateProgress(runId, progress, patch) {
     Object.assign(progress, patch);
     this.deriveProgress(progress);
@@ -591,10 +808,14 @@ class SftpMirrorService {
           fileName: file.fileName,
           snapshotPath: file.eventSnapshotPath,
           documentType: parsed.documentType,
+          vbeln: parsed.vbeln,
           recordKey: parsed.recordKey,
           orderNumber: parsed.orderNumber,
           orderDate: parsed.orderDate,
+          customerPartnerId: parsed.customerPartnerId,
           shipTo: parsed.shipTo,
+          shipToPartnerId: parsed.shipToPartnerId,
+          shipToName: parsed.shipToName,
           customerName: parsed.customerName,
           itemCount: parsed.itemCount,
           totalQty: parsed.totalQty,

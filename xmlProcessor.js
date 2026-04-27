@@ -122,6 +122,12 @@ function findObjectsByPredicate(node, predicate, results = []) {
   return results;
 }
 
+function findSegmentsByName(node, segmentName) {
+  const normalizedSegmentName = normalizeKey(segmentName);
+  return findObjectsByPredicate(node, (key) => normalizeKey(key) === normalizedSegmentName)
+    .map((candidate) => candidate.value);
+}
+
 function collectFieldMap(node) {
   const map = new Map();
 
@@ -257,6 +263,39 @@ function findParty(rootNode, aliases, fallbackKeys) {
   };
 }
 
+function extractSapParty(rootNode, partnerQualifier) {
+  const normalizedQualifier = normalizeKey(partnerQualifier);
+
+  for (const segment of findSegmentsByName(rootNode, "E1ADRM1")) {
+    const fieldMap = collectFieldMap(segment);
+    const qualifier = normalizeKey(getFieldValue(fieldMap, ["PARTNER_Q", "PartnerQualifier"]));
+    if (qualifier !== normalizedQualifier) {
+      continue;
+    }
+
+    const name1 = getFieldValue(fieldMap, ["NAME1", "Name1"]);
+    const name2 = getFieldValue(fieldMap, ["NAME2", "Name2"]);
+    const summaryParts = [
+      name1,
+      name2,
+      getFieldValue(fieldMap, ["STREET1", "Street1", "Address1"]),
+      getFieldValue(fieldMap, ["CITY1", "City1", "City"]),
+      getFieldValue(fieldMap, ["REGION", "Region", "State"]),
+      getFieldValue(fieldMap, ["POSTL_COD1", "PostlCod1", "PostalCode"]),
+      getFieldValue(fieldMap, ["COUNTRY1", "Country1", "Country"])
+    ].filter(Boolean);
+
+    return {
+      partnerId: getFieldValue(fieldMap, ["PARTNER_ID", "PartnerId"]),
+      name: name1,
+      shipToName: [name1, name2].filter(Boolean).join(", "),
+      summary: summaryParts.join(", ")
+    };
+  }
+
+  return null;
+}
+
 function looksLikeItemNode(key, node) {
   const normalizedKey = normalizeKey(key);
   if (["items", "lines", "details", "positions"].includes(normalizedKey)) {
@@ -346,7 +385,69 @@ function extractItem(node, lineNumber) {
   };
 }
 
+function extractSapItems(rootNode) {
+  const candidates = findObjectsByPredicate(rootNode, (key, node) => {
+    const normalizedKey = normalizeKey(key);
+    if (!normalizedKey.startsWith("e1")) {
+      return false;
+    }
+
+    const fieldMap = collectFieldMap(node);
+    return Boolean(
+      getFieldValue(fieldMap, ["MATNR", "MATNR_EXTERNAL", "MATERIAL"]) &&
+      getFieldValue(fieldMap, ["VEMNG", "LFIMG", "MENGE", "WMENG", "BMENG", "Quantity", "Qty", "OrderedQuantity", "ShippedQuantity"])
+    );
+  });
+  const seen = new Set();
+  const items = [];
+
+  for (const candidate of candidates) {
+    const fieldMap = collectFieldMap(candidate.value);
+    const itemCode = getFieldValue(fieldMap, ["MATNR", "MATNR_EXTERNAL", "MATERIAL", "ItemCode", "ProductCode"]);
+    const quantity = parseQuantity(getFieldValue(fieldMap, [
+      "VEMNG",
+      "LFIMG",
+      "MENGE",
+      "WMENG",
+      "BMENG",
+      "Quantity",
+      "Qty",
+      "OrderedQuantity",
+      "ShippedQuantity"
+    ]));
+    const description = getFieldValue(fieldMap, ["ARKTX", "DESCRIPTION", "ItemDescription", "ProductDescription", "NAME"]);
+    const uom = getFieldValue(fieldMap, ["VEMEH", "VRKME", "MEINS", "UOM", "UnitOfMeasure"]);
+    const lineKey = [
+      getFieldValue(fieldMap, ["POSNR", "LineNumber", "LineNo"]),
+      itemCode,
+      quantity.quantityText,
+      uom
+    ].join("|");
+
+    if (!itemCode || !quantity.quantityText || seen.has(lineKey)) {
+      continue;
+    }
+
+    seen.add(lineKey);
+    items.push({
+      lineNumber: items.length + 1,
+      itemCode,
+      description,
+      quantityValue: quantity.quantityValue,
+      quantityText: quantity.quantityText,
+      uom
+    });
+  }
+
+  return items;
+}
+
 function extractItems(rootNode) {
+  const sapItems = extractSapItems(rootNode);
+  if (sapItems.length) {
+    return sapItems;
+  }
+
   const candidates = findObjectsByPredicate(rootNode, looksLikeItemNode);
   const seen = new Set();
   const items = [];
@@ -404,10 +505,14 @@ async function parseXmlSnapshot(snapshotPath, context = {}) {
         parseMessage: "XML parsed but no document structure was found.",
         parsedAt,
         documentType: rootName || path.extname(snapshotPath).replace(".", "").toUpperCase(),
+        vbeln: "",
         recordKey: context.fileName || path.basename(snapshotPath),
         orderNumber: "",
         orderDate: "",
+        customerPartnerId: "",
         shipTo: "",
+        shipToPartnerId: "",
+        shipToName: "",
         customerName: "",
         itemCount: 0,
         totalQty: 0,
@@ -417,7 +522,8 @@ async function parseXmlSnapshot(snapshotPath, context = {}) {
     }
 
     const fieldMap = collectFieldMap(rootNode);
-    const orderNumber = getFieldValue(fieldMap, [
+    const vbeln = getFieldValue(fieldMap, ["VBELN"]);
+    const fallbackOrderNumber = getFieldValue(fieldMap, [
       "OrderNumber",
       "OrderNo",
       "OrderID",
@@ -430,6 +536,7 @@ async function parseXmlSnapshot(snapshotPath, context = {}) {
       "DespatchNumber",
       "ReferenceNumber"
     ]);
+    const orderNumber = vbeln || fallbackOrderNumber;
     const orderDate = getFieldValue(fieldMap, [
       "OrderDate",
       "DocumentDate",
@@ -439,6 +546,8 @@ async function parseXmlSnapshot(snapshotPath, context = {}) {
       "CreationDate",
       "IssueDate"
     ]) || findFirstScalar(rootNode, ["OrderDate", "DocumentDate", "ShipmentDate", "ShipDate"]);
+    const sapCustomerParty = extractSapParty(rootNode, "AG");
+    const sapShipToParty = extractSapParty(rootNode, "WE");
     const shipToParty = findParty(rootNode, ["shipto", "delivery", "st", "consignee", "recipient"], [
       "ShipToName",
       "DeliveryName",
@@ -452,36 +561,44 @@ async function parseXmlSnapshot(snapshotPath, context = {}) {
       "BillToName"
     ]);
     const items = extractItems(rootNode);
-    const recordKey = orderNumber || context.fileName || path.basename(snapshotPath);
+    const recordKey = vbeln || orderNumber || context.fileName || path.basename(snapshotPath);
 
     return {
       parseStatus: "success",
       parseMessage: "",
       parsedAt,
       documentType: rootName || path.extname(snapshotPath).replace(".", "").toUpperCase(),
+      vbeln,
       recordKey,
       orderNumber,
       orderDate,
-      shipTo: shipToParty.summary,
-      customerName: customerParty.name || customerParty.summary,
+      customerPartnerId: sapCustomerParty?.partnerId || "",
+      shipTo: sapShipToParty?.summary || shipToParty.summary,
+      shipToPartnerId: sapShipToParty?.partnerId || "",
+      shipToName: sapShipToParty?.shipToName || shipToParty.name || "",
+      customerName: sapCustomerParty?.name || customerParty.name || customerParty.summary,
       itemCount: items.length,
       totalQty: sumItemQuantities(items),
       itemPreview: buildItemPreview(items),
       items
     };
   } catch (error) {
-    return {
-      parseStatus: "failed",
-      parseMessage: error.message,
-      parsedAt,
-      documentType: path.extname(snapshotPath).replace(".", "").toUpperCase() || "XML",
-      recordKey: context.fileName || path.basename(snapshotPath),
-      orderNumber: "",
-      orderDate: "",
-      shipTo: "",
-      customerName: "",
-      itemCount: 0,
-      totalQty: 0,
+      return {
+        parseStatus: "failed",
+        parseMessage: error.message,
+        parsedAt,
+        documentType: path.extname(snapshotPath).replace(".", "").toUpperCase() || "XML",
+        vbeln: "",
+        recordKey: context.fileName || path.basename(snapshotPath),
+        orderNumber: "",
+        orderDate: "",
+        customerPartnerId: "",
+        shipTo: "",
+        shipToPartnerId: "",
+        shipToName: "",
+        customerName: "",
+        itemCount: 0,
+        totalQty: 0,
       itemPreview: "",
       items: []
     };

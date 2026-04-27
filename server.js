@@ -285,6 +285,7 @@ function buildDashboardHtml(requestUrl) {
   const asnCsvQueryString = new URLSearchParams({
     asn_date: filters.asnDate || ""
   }).toString();
+  const returnTo = `${routeBase}${queryString ? `?${queryString}` : ""}`;
 
   return renderDashboard({
     dashboard,
@@ -308,7 +309,9 @@ function buildDashboardHtml(requestUrl) {
       summary: dashboard.dailyFolderTrend?.summary || null
     },
     links: {
-      syncAction: `/sync?return_to=${encodeURIComponent(`${routeBase}${queryString ? `?${queryString}` : ""}`)}`,
+      currentPath: routeBase,
+      syncAction: `/sync?return_to=${encodeURIComponent(returnTo)}`,
+      reindexAction: `/reindex-xml?return_to=${encodeURIComponent(returnTo)}`,
       activityCsv: `/reports/files.csv${queryString ? `?${queryString}` : ""}`,
       runsCsv: "/reports/runs.csv",
       asnHourlyCsv: `/reports/asn-hourly.csv${asnCsvQueryString ? `?${asnCsvQueryString}` : ""}`
@@ -328,7 +331,8 @@ function buildDesktopHtml(requestUrl) {
   const ops = database.getDesktopOpsData({
     dayRange,
     compareRange,
-    timezone: config.timezone
+    timezone: config.timezone,
+    estimatedLineValue: config.orderLineEstimatedValue
   });
 
   return renderDesktopDashboard({
@@ -339,7 +343,8 @@ function buildDesktopHtml(requestUrl) {
     links: {
       desktop: `/desktop?ops_date=${encodeURIComponent(dayRange.label)}`,
       mobile: "/mobile",
-      admin: "/admin"
+      admin: "/admin",
+      reindexAction: `/reindex-xml?return_to=${encodeURIComponent(`/desktop?ops_date=${dayRange.label}`)}`
     }
   });
 }
@@ -383,10 +388,13 @@ const server = http.createServer((request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   if (request.method === "GET" && requestUrl.pathname === "/health") {
+    const reindexState = mirrorService.getState().reindex || {};
     return sendJson(response, configErrors.length ? 503 : 200, {
       ok: configErrors.length === 0,
       missingConfig: configErrors,
       running: mirrorService.getState().running,
+      reindexRunning: Boolean(reindexState.running),
+      reindexStatus: reindexState.lastRun?.lastStatus || "",
       alertsConfigured: getPublicConfig(config).alertsConfigured,
       snapshotRetentionDays: config.snapshotRetentionDays
     });
@@ -518,6 +526,16 @@ const server = http.createServer((request, response) => {
     return redirect(response, `${returnTo}${returnTo.includes("?") ? "&" : "?"}message=${encodeURIComponent(message)}`);
   }
 
+  if (request.method === "POST" && requestUrl.pathname === "/reindex-xml") {
+    request.resume();
+    const returnTo = requestUrl.searchParams.get("return_to") || "/admin";
+    const started = mirrorService.startHistoricalXmlReindex("manual");
+    const message = started
+      ? "Historical XML repair started."
+      : "Historical XML repair is already running.";
+    return redirect(response, `${returnTo}${returnTo.includes("?") ? "&" : "?"}message=${encodeURIComponent(message)}`);
+  }
+
   response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
   response.end("Not found");
 });
@@ -528,6 +546,9 @@ server.listen(config.port, () => {
     console.log(`Scheduler not started. Missing configuration: ${configErrors.join(", ")}`);
   } else {
     scheduler.start();
+    if (mirrorService.startHistoricalXmlReindexIfNeeded("startup")) {
+      console.log("Historical XML repair started automatically to update legacy indexed data.");
+    }
   }
 });
 
