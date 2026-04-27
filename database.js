@@ -33,6 +33,53 @@ function formatHourWindowLabel(hour) {
   return `${startDisplay}:00 ${suffix} - ${endDisplay}:59 ${suffix}`;
 }
 
+function classifyOpsStage(folderPath) {
+  const normalized = String(folderPath || "").replace(/\\/g, "/").toLowerCase();
+
+  if (normalized.includes("/orders")) {
+    return "orders";
+  }
+
+  if (normalized.includes("/asn")) {
+    return "asn";
+  }
+
+  if (normalized.includes("/receipt")) {
+    return "receipt";
+  }
+
+  if (normalized.includes("/returns")) {
+    return "returns";
+  }
+
+  if (normalized.includes("/997")) {
+    return "997";
+  }
+
+  return "other";
+}
+
+function buildDocumentKey(row) {
+  const rawValue = row.order_number || row.record_key || String(row.file_name || "").replace(/\.[^.]+$/, "") || row.remote_path;
+  return String(rawValue || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function formatStageLabel(stage) {
+  const labels = {
+    orders: "Orders",
+    asn: "ASN",
+    receipt: "Receipt",
+    returns: "Returns",
+    "997": "997",
+    other: "Other"
+  };
+
+  return labels[stage] || "Other";
+}
+
 class MirrorDatabase {
   constructor(databasePath) {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -380,6 +427,64 @@ class MirrorDatabase {
       ORDER BY event_at ASC, id ASC
     `);
 
+    this.opsFlowEventsStmt = this.db.prepare(`
+      SELECT
+        event_at,
+        folder_path,
+        file_name,
+        remote_path,
+        size
+      FROM file_events
+      WHERE
+        event_type = 'new' AND
+        event_at >= ? AND
+        event_at < ?
+      ORDER BY event_at ASC, id ASC
+    `);
+
+    this.opsXmlDocumentsInRangeStmt = this.db.prepare(`
+      SELECT
+        parsed_at,
+        folder_path,
+        remote_path,
+        file_name,
+        document_type,
+        record_key,
+        order_number,
+        order_date,
+        ship_to,
+        customer_name,
+        item_count,
+        total_qty
+      FROM xml_documents
+      WHERE
+        parse_status = 'success' AND
+        parsed_at >= ? AND
+        parsed_at < ?
+      ORDER BY parsed_at ASC, id ASC
+    `);
+
+    this.opsXmlDocumentsThroughStmt = this.db.prepare(`
+      SELECT
+        parsed_at,
+        folder_path,
+        remote_path,
+        file_name,
+        document_type,
+        record_key,
+        order_number,
+        order_date,
+        ship_to,
+        customer_name,
+        item_count,
+        total_qty
+      FROM xml_documents
+      WHERE
+        parse_status = 'success' AND
+        parsed_at < ?
+      ORDER BY parsed_at ASC, id ASC
+    `);
+
     this.fileEventIdBySnapshotPathStmt = this.db.prepare(`
       SELECT id
       FROM file_events
@@ -664,6 +769,83 @@ class MirrorDatabase {
     };
   }
 
+  getDesktopOpsData(options = {}) {
+    const timezone = options.timezone || "America/New_York";
+    const dayRange = options.dayRange;
+    const compareRange = options.compareRange || null;
+
+    if (!dayRange) {
+      return null;
+    }
+
+    const currentLocalDayLabel = getLocalDateLabel(new Date().toISOString(), timezone);
+    const isToday = dayRange.label === currentLocalDayLabel;
+    const referenceIso = isToday ? new Date().toISOString() : dayRange.endIso;
+    const dayEvents = this.opsFlowEventsStmt.all(dayRange.startIso, dayRange.endIso);
+    const compareEvents = compareRange
+      ? this.opsFlowEventsStmt.all(compareRange.startIso, compareRange.endIso)
+      : [];
+    const dayDocuments = this.opsXmlDocumentsInRangeStmt.all(dayRange.startIso, dayRange.endIso);
+    const timelineDocuments = this.opsXmlDocumentsThroughStmt.all(dayRange.endIso);
+    const latestRun = this.recentRunsStmt.all(1)[0] || null;
+    const folderStats = this.folderStatsStmt.all(options.folderLimit || 12);
+
+    const flow = this.buildHourlyStageFlow(dayEvents, timezone);
+    const compareFlow = this.buildHourlyStageFlow(compareEvents, timezone);
+    const stageTotals = this.summarizeStageTotals(flow.rows);
+    const compareStageTotals = this.summarizeStageTotals(compareFlow.rows);
+    const funnel = this.buildFunnel(stageTotals);
+    const cumulative = this.buildCumulativePace(flow.rows, compareFlow.rows);
+    const folderLoad = this.buildFolderLoad(dayEvents);
+    const customerLoad = this.buildCustomerLoad(dayDocuments);
+    const timeline = this.buildOrderTimeline(timelineDocuments);
+    const backlog = this.buildBacklog(timeline, referenceIso);
+    const hourNow = isToday ? getLocalHourOfDay(new Date().toISOString(), timezone) : null;
+    const currentHourRow = hourNow === null ? null : flow.rows[hourNow];
+    const peakHour = flow.summary.peakHourLabel
+      ? flow.rows.find((row) => row.hour_label === flow.summary.peakHourLabel) || null
+      : null;
+    const syncHealth = {
+      latestRun,
+      trackedFiles: this.getTrackedFileEstimate(),
+      trackedFolders: folderStats.length,
+      currentRunStatus: latestRun?.status || "idle"
+    };
+
+    return {
+      dateLabel: dayRange.label,
+      compareDateLabel: compareRange?.label || "",
+      isToday,
+      flow,
+      compareFlow,
+      stageTotals,
+      compareStageTotals,
+      funnel,
+      cumulative,
+      folderLoad,
+      customerLoad,
+      backlog,
+      syncHealth,
+      kpis: {
+        totalNewFiles: flow.summary.totalFiles,
+        orders: stageTotals.orders?.count || 0,
+        asn: stageTotals.asn?.count || 0,
+        receipt: stageTotals.receipt?.count || 0,
+        returns: stageTotals.returns?.count || 0,
+        activeFolders: flow.summary.activeFolders,
+        openBacklog: backlog.summary.awaitingAsn + backlog.summary.awaitingReceipt,
+        oldestAgeHours: backlog.summary.oldestAgeHours,
+        currentHourFiles: currentHourRow?.total || 0,
+        currentHourLabel: currentHourRow?.hour_label || "",
+        peakHourFiles: peakHour?.total || 0,
+        peakHourLabel: peakHour?.hour_label || "",
+        compareOrdersDelta: (stageTotals.orders?.count || 0) - (compareStageTotals.orders?.count || 0),
+        compareAsnDelta: (stageTotals.asn?.count || 0) - (compareStageTotals.asn?.count || 0),
+        compareReceiptDelta: (stageTotals.receipt?.count || 0) - (compareStageTotals.receipt?.count || 0)
+      }
+    };
+  }
+
   listFileEvents(filters = {}, limit = 50) {
     const { whereSql, params } = this.buildFileEventFilters(filters);
     const statement = this.db.prepare(`
@@ -914,6 +1096,302 @@ class MirrorDatabase {
         peakDayCount: peakDay?.totalAdded || 0
       }
     };
+  }
+
+  buildHourlyStageFlow(events, timezone) {
+    const rows = Array.from({ length: 24 }, (_, hour) => ({
+      hour24: hour,
+      hour_label: formatHourWindowLabel(hour),
+      total: 0,
+      total_bytes: 0,
+      byStage: {
+        orders: 0,
+        asn: 0,
+        receipt: 0,
+        returns: 0,
+        "997": 0,
+        other: 0
+      }
+    }));
+    const activeFolders = new Set();
+
+    for (const event of events) {
+      const hour = getLocalHourOfDay(event.event_at, timezone);
+      const stage = classifyOpsStage(event.folder_path);
+      const bucket = rows[hour];
+      bucket.total += 1;
+      bucket.total_bytes += Number(event.size || 0);
+      bucket.byStage[stage] += 1;
+      activeFolders.add(event.folder_path);
+    }
+
+    const peakTotal = Math.max(...rows.map((row) => row.total), 0);
+    const peakHour = peakTotal > 0 ? rows.find((row) => row.total === peakTotal) : null;
+
+    return {
+      rows,
+      summary: {
+        totalFiles: events.length,
+        activeFolders: activeFolders.size,
+        peakHourLabel: peakHour?.hour_label || "",
+        peakHourCount: peakHour?.total || 0
+      }
+    };
+  }
+
+  summarizeStageTotals(rows) {
+    const totals = {
+      orders: { stage: "orders", label: "Orders", count: 0 },
+      asn: { stage: "asn", label: "ASN", count: 0 },
+      receipt: { stage: "receipt", label: "Receipt", count: 0 },
+      returns: { stage: "returns", label: "Returns", count: 0 },
+      "997": { stage: "997", label: "997", count: 0 },
+      other: { stage: "other", label: "Other", count: 0 }
+    };
+
+    for (const row of rows) {
+      for (const [stage, count] of Object.entries(row.byStage)) {
+        totals[stage].count += count;
+      }
+    }
+
+    return totals;
+  }
+
+  buildFunnel(stageTotals) {
+    const stages = ["orders", "asn", "receipt", "returns"];
+    const maxCount = Math.max(...stages.map((stage) => stageTotals[stage]?.count || 0), 1);
+
+    return stages.map((stage) => {
+      const count = stageTotals[stage]?.count || 0;
+      return {
+        stage,
+        label: formatStageLabel(stage),
+        count,
+        widthPercent: Math.max(18, Math.round((count / maxCount) * 100))
+      };
+    });
+  }
+
+  buildCumulativePace(dayRows, compareRows) {
+    const stageKeys = ["orders", "asn"];
+    const result = {
+      hours: dayRows.map((row) => row.hour24),
+      labels: dayRows.map((row) => row.hour_label),
+      today: {},
+      compare: {},
+      totals: {}
+    };
+
+    for (const stage of stageKeys) {
+      result.today[stage] = [];
+      result.compare[stage] = [];
+      result.totals[stage] = {
+        today: 0,
+        compare: 0
+      };
+
+      let dayRunning = 0;
+      let compareRunning = 0;
+
+      for (let index = 0; index < dayRows.length; index += 1) {
+        dayRunning += dayRows[index].byStage[stage] || 0;
+        compareRunning += (compareRows[index]?.byStage?.[stage]) || 0;
+        result.today[stage].push(dayRunning);
+        result.compare[stage].push(compareRunning);
+      }
+
+      result.totals[stage].today = dayRunning;
+      result.totals[stage].compare = compareRunning;
+    }
+
+    return result;
+  }
+
+  buildFolderLoad(events) {
+    const folders = new Map();
+
+    for (const event of events) {
+      const existing = folders.get(event.folder_path) || {
+        folder_path: event.folder_path,
+        stage: classifyOpsStage(event.folder_path),
+        added_count: 0,
+        added_bytes: 0,
+        last_event_at: event.event_at
+      };
+
+      existing.added_count += 1;
+      existing.added_bytes += Number(event.size || 0);
+      existing.last_event_at = event.event_at;
+      folders.set(event.folder_path, existing);
+    }
+
+    return Array.from(folders.values())
+      .sort((left, right) => right.added_count - left.added_count || left.folder_path.localeCompare(right.folder_path))
+      .slice(0, 12);
+  }
+
+  buildCustomerLoad(documents) {
+    const customers = new Map();
+
+    for (const document of documents) {
+      if (classifyOpsStage(document.folder_path) !== "orders") {
+        continue;
+      }
+
+      const customerName = document.customer_name || "Unknown customer";
+      const existing = customers.get(customerName) || {
+        customer_name: customerName,
+        order_count: 0,
+        total_qty: 0,
+        total_items: 0,
+        ship_to_count: 0,
+        shipTos: new Set(),
+        last_parsed_at: document.parsed_at
+      };
+
+      existing.order_count += 1;
+      existing.total_qty += Number(document.total_qty || 0);
+      existing.total_items += Number(document.item_count || 0);
+      if (document.ship_to) {
+        existing.shipTos.add(document.ship_to);
+      }
+      existing.ship_to_count = existing.shipTos.size;
+      existing.last_parsed_at = document.parsed_at;
+      customers.set(customerName, existing);
+    }
+
+    return Array.from(customers.values())
+      .map((customer) => ({
+        customer_name: customer.customer_name,
+        order_count: customer.order_count,
+        total_qty: customer.total_qty,
+        total_items: customer.total_items,
+        ship_to_count: customer.ship_to_count,
+        last_parsed_at: customer.last_parsed_at
+      }))
+      .sort((left, right) => right.order_count - left.order_count || right.total_qty - left.total_qty || left.customer_name.localeCompare(right.customer_name))
+      .slice(0, 10);
+  }
+
+  buildOrderTimeline(documents) {
+    const timeline = new Map();
+
+    for (const document of documents) {
+      const stage = classifyOpsStage(document.folder_path);
+      if (!["orders", "asn", "receipt", "returns"].includes(stage)) {
+        continue;
+      }
+
+      const documentKey = buildDocumentKey(document);
+      if (!documentKey) {
+        continue;
+      }
+
+      const existing = timeline.get(documentKey) || {
+        document_key: documentKey,
+        display_key: document.order_number || document.record_key || document.file_name || document.remote_path,
+        customer_name: document.customer_name || "",
+        ship_to: document.ship_to || "",
+        order_date: document.order_date || "",
+        item_count: Number(document.item_count || 0),
+        total_qty: Number(document.total_qty || 0),
+        orders_at: null,
+        asn_at: null,
+        receipt_at: null,
+        returns_at: null
+      };
+
+      if (!existing.customer_name && document.customer_name) {
+        existing.customer_name = document.customer_name;
+      }
+
+      if (!existing.ship_to && document.ship_to) {
+        existing.ship_to = document.ship_to;
+      }
+
+      if (!existing.order_date && document.order_date) {
+        existing.order_date = document.order_date;
+      }
+
+      if (stage === "orders") {
+        existing.orders_at = existing.orders_at || document.parsed_at;
+        existing.item_count = Math.max(existing.item_count, Number(document.item_count || 0));
+        existing.total_qty = Math.max(existing.total_qty, Number(document.total_qty || 0));
+      } else if (stage === "asn") {
+        existing.asn_at = existing.asn_at || document.parsed_at;
+      } else if (stage === "receipt") {
+        existing.receipt_at = existing.receipt_at || document.parsed_at;
+      } else if (stage === "returns") {
+        existing.returns_at = existing.returns_at || document.parsed_at;
+      }
+
+      timeline.set(documentKey, existing);
+    }
+
+    return Array.from(timeline.values());
+  }
+
+  buildBacklog(timeline, referenceIso) {
+    const referenceMs = new Date(referenceIso).getTime();
+    const awaitingAsn = [];
+    const awaitingReceipt = [];
+
+    for (const entry of timeline) {
+      if (entry.orders_at && !entry.asn_at) {
+        awaitingAsn.push(this.createBacklogEntry(entry, "Awaiting ASN", entry.orders_at, referenceMs));
+      } else if (entry.asn_at && !entry.receipt_at) {
+        awaitingReceipt.push(this.createBacklogEntry(entry, "Awaiting Receipt", entry.asn_at, referenceMs));
+      }
+    }
+
+    const combined = [...awaitingAsn, ...awaitingReceipt]
+      .sort((left, right) => right.ageHours - left.ageHours || left.display_key.localeCompare(right.display_key));
+    const oldestAgeHours = combined[0]?.ageHours || 0;
+
+    return {
+      summary: {
+        awaitingAsn: awaitingAsn.length,
+        awaitingReceipt: awaitingReceipt.length,
+        oldestAgeHours,
+        ageBuckets: this.buildAgeBuckets(combined)
+      },
+      exceptions: combined.slice(0, 12)
+    };
+  }
+
+  createBacklogEntry(entry, statusLabel, startedAt, referenceMs) {
+    const ageHours = Math.max(0, (referenceMs - new Date(startedAt).getTime()) / (60 * 60 * 1000));
+
+    return {
+      display_key: entry.display_key,
+      customer_name: entry.customer_name || "Unknown customer",
+      ship_to: entry.ship_to || "",
+      order_date: entry.order_date || "",
+      status_label: statusLabel,
+      started_at: startedAt,
+      ageHours,
+      item_count: entry.item_count,
+      total_qty: entry.total_qty
+    };
+  }
+
+  buildAgeBuckets(entries) {
+    const buckets = [
+      { label: "0-1 hr", minimum: 0, maximum: 1, count: 0 },
+      { label: "1-2 hr", minimum: 1, maximum: 2, count: 0 },
+      { label: "2-4 hr", minimum: 2, maximum: 4, count: 0 },
+      { label: "4+ hr", minimum: 4, maximum: Number.POSITIVE_INFINITY, count: 0 }
+    ];
+
+    for (const entry of entries) {
+      const bucket = buckets.find((item) => entry.ageHours >= item.minimum && entry.ageHours < item.maximum);
+      if (bucket) {
+        bucket.count += 1;
+      }
+    }
+
+    return buckets;
   }
 
   getXmlFolderTabs(folderLimit = 8, documentLimit = 15) {

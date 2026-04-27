@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check alerting.js && node --check config.js && node --check database.js && node --check renderDashboard.js && node --check scheduler.js && node --check sftpMirror.js && node --check time.js && node --check xmlProcessor.js"
+    "check": "node --check server.js && node --check alerting.js && node --check config.js && node --check database.js && node --check renderDashboard.js && node --check renderDesktopDashboard.js && node --check scheduler.js && node --check sftpMirror.js && node --check time.js && node --check xmlProcessor.js"
   },
   "engines": {
     "node": ">=22"

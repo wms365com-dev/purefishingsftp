@@ -8,6 +8,7 @@ const { AlertManager } = require("./alerting");
 const { getPublicConfig, loadConfig, validateConfig } = require("./config");
 const { MirrorDatabase } = require("./database");
 const { renderDashboard } = require("./renderDashboard");
+const { renderDesktopDashboard } = require("./renderDesktopDashboard");
 const { SyncScheduler } = require("./scheduler");
 const { SftpMirrorService } = require("./sftpMirror");
 const { getLocalDayRange } = require("./time");
@@ -268,6 +269,7 @@ function rowsToCsv(headers, rows) {
 function buildDashboardHtml(requestUrl) {
   const flashMessage = requestUrl.searchParams.get("message");
   const filters = parseActivityFilters(requestUrl.searchParams);
+  const routeBase = requestUrl.pathname === "/mobile" ? "/mobile" : "/admin";
   const dashboard = database.getDashboardData(filters, {
     activityLimit: config.activityPageSize,
     folderLimit: 50,
@@ -306,9 +308,38 @@ function buildDashboardHtml(requestUrl) {
       summary: dashboard.dailyFolderTrend?.summary || null
     },
     links: {
+      syncAction: `/sync?return_to=${encodeURIComponent(`${routeBase}${queryString ? `?${queryString}` : ""}`)}`,
       activityCsv: `/reports/files.csv${queryString ? `?${queryString}` : ""}`,
       runsCsv: "/reports/runs.csv",
       asnHourlyCsv: `/reports/asn-hourly.csv${asnCsvQueryString ? `?${asnCsvQueryString}` : ""}`
+    }
+  });
+}
+
+function buildDesktopHtml(requestUrl) {
+  const flashMessage = requestUrl.searchParams.get("message");
+  const requestedLabel = requestUrl.searchParams.get("ops_date")?.trim() || "";
+  const selectedRange = requestedLabel
+    ? getLocalDayRange(requestedLabel, config.timezone)
+    : getLocalDayRange(new Date(), config.timezone);
+  const dayRange = selectedRange || getLocalDayRange(new Date(), config.timezone);
+  const compareLabel = shiftDateLabel(dayRange.label, -1);
+  const compareRange = getLocalDayRange(compareLabel, config.timezone);
+  const ops = database.getDesktopOpsData({
+    dayRange,
+    compareRange,
+    timezone: config.timezone
+  });
+
+  return renderDesktopDashboard({
+    ops,
+    config: getPublicConfig(config),
+    serviceState: mirrorService.getState(),
+    flashMessage,
+    links: {
+      desktop: `/desktop?ops_date=${encodeURIComponent(dayRange.label)}`,
+      mobile: "/mobile",
+      admin: "/admin"
     }
   });
 }
@@ -362,6 +393,22 @@ const server = http.createServer((request, response) => {
   }
 
   if (request.method === "GET" && requestUrl.pathname === "/") {
+    if (configErrors.length) {
+      return sendHtml(response, 503, buildConfigPage());
+    }
+
+    return redirect(response, "/desktop");
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/desktop") {
+    if (configErrors.length) {
+      return sendHtml(response, 503, buildConfigPage());
+    }
+
+    return sendHtml(response, 200, buildDesktopHtml(requestUrl));
+  }
+
+  if (request.method === "GET" && (requestUrl.pathname === "/mobile" || requestUrl.pathname === "/admin")) {
     if (configErrors.length) {
       return sendHtml(response, 503, buildConfigPage());
     }
@@ -460,14 +507,15 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "POST" && requestUrl.pathname === "/sync") {
     request.resume();
+    const returnTo = requestUrl.searchParams.get("return_to") || "/admin";
 
     if (configErrors.length) {
-      return redirect(response, `/?message=${encodeURIComponent("Sync cannot start until required SFTP environment variables are configured.")}`);
+      return redirect(response, `${returnTo}${returnTo.includes("?") ? "&" : "?"}message=${encodeURIComponent("Sync cannot start until required SFTP environment variables are configured.")}`);
     }
 
     const started = mirrorService.startBackgroundSync("manual");
     const message = started ? "Manual sync started." : "A sync is already running.";
-    return redirect(response, `/?message=${encodeURIComponent(message)}`);
+    return redirect(response, `${returnTo}${returnTo.includes("?") ? "&" : "?"}message=${encodeURIComponent(message)}`);
   }
 
   response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

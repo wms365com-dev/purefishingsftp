@@ -1624,7 +1624,7 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         ${flash}
         ${queuedNotice}
         <div class="button-row" style="margin-top:1rem">
-          <form method="post" action="/sync">
+          <form method="post" action="${escapeHtml(links.syncAction || "/sync")}">
             <button type="submit"${serviceState.running ? " disabled" : ""}>Run Sync Now</button>
           </form>
           <a class="button-link secondary" href="${escapeHtml(links.runsCsv)}">Export Runs CSV</a>
