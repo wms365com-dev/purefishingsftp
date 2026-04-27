@@ -6,9 +6,15 @@ cd /d "%~dp0"
 set "REPO_URL=https://github.com/wms365com-dev/purefishingsftp.git"
 set "TARGET_BRANCH=main"
 set "DEFAULT_MESSAGE=Update project files"
-set "COMMIT_MESSAGE=%*"
+set "COMMIT_MESSAGE="
+set "FORCE_UPDATE=0"
+set "FORCE_PUSH=0"
 
-if "%COMMIT_MESSAGE%"=="" set "COMMIT_MESSAGE=%DEFAULT_MESSAGE%"
+for %%A in (%*) do (
+  call :parse_arg "%%~A"
+)
+
+if not defined COMMIT_MESSAGE set "COMMIT_MESSAGE=%DEFAULT_MESSAGE%"
 
 set "GIT_EXE="
 
@@ -34,6 +40,8 @@ if not defined GIT_EXE (
 )
 
 echo Using Git: "%GIT_EXE%"
+if "%FORCE_UPDATE%"=="1" echo Force update mode is ON. An empty commit will be created if needed.
+if "%FORCE_PUSH%"=="1" echo Force push mode is ON. The remote branch will be updated with --force-with-lease.
 
 "%GIT_EXE%" config --global user.name >nul 2>&1
 if errorlevel 1 (
@@ -87,20 +95,27 @@ for /f %%A in ('"%GIT_EXE%" status --porcelain') do (
 :changes_found
 if not defined HAS_CHANGES (
   echo No changes to commit.
+  if "%FORCE_UPDATE%"=="1" (
+    echo Creating empty commit to force a new GitHub update...
+    "%GIT_EXE%" commit --allow-empty -m "%COMMIT_MESSAGE%"
+    if errorlevel 1 goto :git_failed
+    goto :push_changes
+  )
   echo Attempting push anyway...
-  "%GIT_EXE%" push -u origin %TARGET_BRANCH%
-  if errorlevel 1 goto :git_failed
-  echo Push complete.
-  pause
-  exit /b 0
+  goto :push_changes
 )
 
 echo Creating commit...
 "%GIT_EXE%" commit -m "%COMMIT_MESSAGE%"
 if errorlevel 1 goto :git_failed
 
+:push_changes
 echo Pushing to %REPO_URL% on branch %TARGET_BRANCH%...
-"%GIT_EXE%" push -u origin %TARGET_BRANCH%
+if "%FORCE_PUSH%"=="1" (
+  "%GIT_EXE%" push -u origin %TARGET_BRANCH% --force-with-lease
+) else (
+  "%GIT_EXE%" push -u origin %TARGET_BRANCH%
+)
 if errorlevel 1 goto :git_failed
 
 echo.
@@ -117,6 +132,31 @@ if /I "%CANDIDATE%"=="git" (
 )
 
 if exist "%CANDIDATE%" set "GIT_EXE=%CANDIDATE%"
+goto :eof
+
+:parse_arg
+set "ARG=%~1"
+if /I "%ARG%"=="/forceupdate" (
+  set "FORCE_UPDATE=1"
+  goto :eof
+)
+if /I "%ARG%"=="--force-update" (
+  set "FORCE_UPDATE=1"
+  goto :eof
+)
+if /I "%ARG%"=="/forcepush" (
+  set "FORCE_PUSH=1"
+  goto :eof
+)
+if /I "%ARG%"=="--force-push" (
+  set "FORCE_PUSH=1"
+  goto :eof
+)
+if defined COMMIT_MESSAGE (
+  set "COMMIT_MESSAGE=%COMMIT_MESSAGE% %ARG%"
+) else (
+  set "COMMIT_MESSAGE=%ARG%"
+)
 goto :eof
 
 :git_failed
