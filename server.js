@@ -390,8 +390,9 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "GET" && requestUrl.pathname === "/health") {
     const reindexState = mirrorService.getState().reindex || {};
-    return sendJson(response, configErrors.length ? 503 : 200, {
-      ok: configErrors.length === 0,
+    return sendJson(response, 200, {
+      ok: true,
+      ready: configErrors.length === 0,
       missingConfig: configErrors,
       running: mirrorService.getState().running,
       reindexRunning: Boolean(reindexState.running),
@@ -403,7 +404,7 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "GET" && requestUrl.pathname === "/") {
     if (configErrors.length) {
-      return sendHtml(response, 503, buildConfigPage());
+      return sendHtml(response, 200, buildConfigPage());
     }
 
     return redirect(response, "/desktop");
@@ -411,7 +412,7 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "GET" && requestUrl.pathname === "/desktop") {
     if (configErrors.length) {
-      return sendHtml(response, 503, buildConfigPage());
+      return sendHtml(response, 200, buildConfigPage());
     }
 
     return sendHtml(response, 200, buildDesktopHtml(requestUrl));
@@ -419,7 +420,7 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "GET" && (requestUrl.pathname === "/mobile" || requestUrl.pathname === "/admin")) {
     if (configErrors.length) {
-      return sendHtml(response, 503, buildConfigPage());
+      return sendHtml(response, 200, buildConfigPage());
     }
 
     return sendHtml(response, 200, buildDashboardHtml(requestUrl));
