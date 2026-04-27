@@ -891,10 +891,11 @@ class MirrorDatabase {
     const funnel = this.buildFunnel(stageTotals);
     const cumulative = this.buildCumulativePace(flow.rows, compareFlow.rows);
     const folderLoad = this.buildFolderLoad(dayEvents);
-    const customerLoad = this.buildCustomerLoad(dayDocuments);
+    const customerLoad = this.buildCustomerLoad(dayDocuments, estimatedLineValue);
     const timeline = this.buildOrderTimeline(timelineDocuments);
     const backlog = this.buildBacklog(timeline, referenceIso);
     const pendingAsnByCustomer = this.buildPendingAsnByCustomer(timeline, referenceIso, estimatedLineValue);
+    const closedAsnByCustomer = this.buildClosedAsnByCustomer(timeline, dayRange, estimatedLineValue);
     const hourNow = isToday ? getLocalHourOfDay(new Date().toISOString(), timezone) : null;
     const currentHourRow = hourNow === null ? null : flow.rows[hourNow];
     const peakHour = flow.summary.peakHourLabel
@@ -921,6 +922,7 @@ class MirrorDatabase {
       customerLoad,
       backlog,
       pendingAsnByCustomer,
+      closedAsnByCustomer,
       syncHealth,
       kpis: {
         totalNewFiles: flow.summary.totalFiles,
@@ -934,6 +936,9 @@ class MirrorDatabase {
         pendingAsnOrders: pendingAsnByCustomer.summary.pendingOrders,
         pendingAsnLines: pendingAsnByCustomer.summary.pendingLines,
         pendingAsnEstimatedValue: pendingAsnByCustomer.summary.estimatedValue,
+        closedAsnOrders: closedAsnByCustomer.summary.closedOrders,
+        closedAsnLines: closedAsnByCustomer.summary.closedLines,
+        closedAsnEstimatedValue: closedAsnByCustomer.summary.estimatedValue,
         currentHourFiles: currentHourRow?.total || 0,
         currentHourLabel: currentHourRow?.hour_label || "",
         peakHourFiles: peakHour?.total || 0,
@@ -1440,7 +1445,7 @@ class MirrorDatabase {
       .slice(0, 12);
   }
 
-  buildCustomerLoad(documents) {
+  buildCustomerLoad(documents, estimatedLineValue = 0) {
     const customers = new Map();
 
     for (const document of documents) {
@@ -1479,6 +1484,7 @@ class MirrorDatabase {
         order_count: customer.order_count,
         total_qty: customer.total_qty,
         total_items: customer.total_items,
+        estimated_value: customer.total_items * estimatedLineValue,
         ship_to_count: customer.ship_to_count,
         last_parsed_at: customer.last_parsed_at
       }))
@@ -1673,6 +1679,76 @@ class MirrorDatabase {
         customers: rows.length,
         pendingOrders: rows.reduce((sum, row) => sum + row.pending_orders, 0),
         pendingLines: rows.reduce((sum, row) => sum + row.pending_lines, 0),
+        estimatedValue: rows.reduce((sum, row) => sum + row.estimated_value, 0)
+      }
+    };
+  }
+
+  buildClosedAsnByCustomer(timeline, dayRange, estimatedLineValue) {
+    const customers = new Map();
+
+    for (const entry of timeline) {
+      if (!entry.orders_at || !entry.asn_at) {
+        continue;
+      }
+
+      if (entry.asn_at < dayRange.startIso || entry.asn_at >= dayRange.endIso) {
+        continue;
+      }
+
+      const closedLines = Math.max(1, Number(entry.item_count || 0));
+      const estimatedValue = closedLines * estimatedLineValue;
+      const customerKey = buildCustomerGroupKey(entry);
+      const existing = customers.get(customerKey) || {
+        customer_partner_id: entry.customer_partner_id || "",
+        customer_name: entry.customer_name || "Unknown customer",
+        closed_orders: 0,
+        closed_lines: 0,
+        closed_qty: 0,
+        estimated_value: 0,
+        latest_asn_at: entry.asn_at,
+        top_ship_to: "",
+        shipToCounts: new Map()
+      };
+
+      existing.closed_orders += 1;
+      existing.closed_lines += closedLines;
+      existing.closed_qty += Number(entry.total_qty || 0);
+      existing.estimated_value += estimatedValue;
+
+      if (!existing.latest_asn_at || entry.asn_at > existing.latest_asn_at) {
+        existing.latest_asn_at = entry.asn_at;
+      }
+
+      const shipToLabel = entry.ship_to_name || entry.ship_to || "Unknown ship-to";
+      existing.shipToCounts.set(shipToLabel, (existing.shipToCounts.get(shipToLabel) || 0) + 1);
+      customers.set(customerKey, existing);
+    }
+
+    const rows = Array.from(customers.values())
+      .map((customer) => {
+        const topShipTo = Array.from(customer.shipToCounts.entries())
+          .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || "";
+
+        return {
+          customer_partner_id: customer.customer_partner_id,
+          customer_name: customer.customer_name,
+          closed_orders: customer.closed_orders,
+          closed_lines: customer.closed_lines,
+          closed_qty: customer.closed_qty,
+          estimated_value: customer.estimated_value,
+          latest_asn_at: customer.latest_asn_at,
+          top_ship_to: topShipTo
+        };
+      })
+      .sort((left, right) => right.estimated_value - left.estimated_value || right.closed_orders - left.closed_orders || left.customer_name.localeCompare(right.customer_name));
+
+    return {
+      rows: rows.slice(0, 12),
+      summary: {
+        customers: rows.length,
+        closedOrders: rows.reduce((sum, row) => sum + row.closed_orders, 0),
+        closedLines: rows.reduce((sum, row) => sum + row.closed_lines, 0),
         estimatedValue: rows.reduce((sum, row) => sum + row.estimated_value, 0)
       }
     };

@@ -347,6 +347,7 @@ function renderCustomerTable(customers, timezone) {
             <th>Orders</th>
             <th>Total Qty</th>
             <th>Item Lines</th>
+            <th>Est. Value</th>
             <th>Ship Tos</th>
             <th>Latest</th>
           </tr>
@@ -358,6 +359,7 @@ function renderCustomerTable(customers, timezone) {
               <td>${escapeHtml(formatNumber(customer.order_count))}</td>
               <td>${escapeHtml(formatQuantity(customer.total_qty))}</td>
               <td>${escapeHtml(formatNumber(customer.total_items))}</td>
+              <td>${escapeHtml(formatCurrency(customer.estimated_value))}</td>
               <td>${escapeHtml(formatNumber(customer.ship_to_count))}</td>
               <td>${escapeHtml(formatDateTime(customer.last_parsed_at, timezone))}</td>
             </tr>
@@ -397,6 +399,44 @@ function renderPendingAsnCustomerTable(report) {
               <td>${escapeHtml(formatNumber(row.pending_lines))}</td>
               <td>${escapeHtml(formatCurrency(row.estimated_value))}</td>
               <td>${escapeHtml(formatAgeHours(row.oldest_age_hours))}</td>
+              <td>${escapeHtml(row.top_ship_to || "-")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderClosedAsnCustomerTable(report, timezone) {
+  const rows = report?.rows || [];
+  if (!rows.length) {
+    return `<div class="empty-state">No orders were closed by ASN on the selected day.</div>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Partner ID</th>
+            <th>Closed Orders</th>
+            <th>Closed Lines</th>
+            <th>Est. Value</th>
+            <th>Latest ASN</th>
+            <th>Top Ship-To</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.customer_name)}</td>
+              <td>${escapeHtml(row.customer_partner_id || "-")}</td>
+              <td>${escapeHtml(formatNumber(row.closed_orders))}</td>
+              <td>${escapeHtml(formatNumber(row.closed_lines))}</td>
+              <td>${escapeHtml(formatCurrency(row.estimated_value))}</td>
+              <td>${escapeHtml(formatDateTime(row.latest_asn_at, timezone))}</td>
               <td>${escapeHtml(row.top_ship_to || "-")}</td>
             </tr>
           `).join("")}
@@ -494,6 +534,7 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
     : ops.kpis.peakHourFiles;
   const backlogSummary = ops.backlog?.summary || { awaitingAsn: 0, awaitingReceipt: 0, oldestAgeHours: 0 };
   const pendingAsnSummary = ops.pendingAsnByCustomer?.summary || { customers: 0, pendingOrders: 0, pendingLines: 0, estimatedValue: 0 };
+  const closedAsnSummary = ops.closedAsnByCustomer?.summary || { customers: 0, closedOrders: 0, closedLines: 0, estimatedValue: 0 };
   const latestRunMessage = ops.syncHealth?.latestRun?.message || "No sync message yet.";
 
   return `<!doctype html>
@@ -970,8 +1011,10 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
           ${renderKpiCard("Orders", formatNumber(ops.kpis.orders), formatDelta(ops.kpis.compareOrdersDelta), "good")}
           ${renderKpiCard("ASN", formatNumber(ops.kpis.asn), formatDelta(ops.kpis.compareAsnDelta), ops.kpis.asn >= ops.kpis.orders ? "good" : "")}
           ${renderKpiCard("Receipts", formatNumber(ops.kpis.receipt), formatDelta(ops.kpis.compareReceiptDelta))}
+          ${renderKpiCard("Closed By ASN", formatNumber(ops.kpis.closedAsnOrders), `${formatNumber(ops.kpis.closedAsnLines)} closed lines`, ops.kpis.closedAsnOrders > 0 ? "good" : "")}
           ${renderKpiCard("Pending ASN Orders", formatNumber(ops.kpis.pendingAsnOrders), `${formatNumber(ops.kpis.pendingAsnLines)} pending lines`, ops.kpis.pendingAsnOrders > 0 ? "warn" : "good")}
           ${renderKpiCard(currentOrPeakLabel, formatNumber(currentOrPeakValue), ops.isToday ? "Current selected-hour arrivals" : "Highest hour on selected day")}
+          ${renderKpiCard("Closed ASN Est. Value", formatCurrency(ops.kpis.closedAsnEstimatedValue), `${formatCurrency(config.orderLineEstimatedValue)} per line workload estimate`, ops.kpis.closedAsnEstimatedValue > 0 ? "good" : "")}
           ${renderKpiCard("Pending ASN Est. Value", formatCurrency(ops.kpis.pendingAsnEstimatedValue), `${formatCurrency(config.orderLineEstimatedValue)} per line workload estimate`, ops.kpis.pendingAsnEstimatedValue > 0 ? "warn" : "good")}
           ${renderKpiCard("Open Backlog", formatNumber(ops.kpis.openBacklog), `${formatNumber(backlogSummary.awaitingAsn)} awaiting ASN, ${formatNumber(backlogSummary.awaitingReceipt)} awaiting receipt`, ops.kpis.openBacklog > 0 ? "warn" : "good")}
           ${renderKpiCard("Oldest Waiting", formatAgeHours(ops.kpis.oldestAgeHours), "Longest unresolved order-flow age", ops.kpis.oldestAgeHours >= 4 ? "warn" : "")}
@@ -1089,6 +1132,31 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
       <article class="panel">
         <div class="panel-head">
           <div>
+            <div class="eyebrow">Closed ASN</div>
+            <h3>Orders closed by ASN on the selected day</h3>
+            <p>These orders have both an Order document and a matching ASN using <strong>VBELN</strong>.</p>
+          </div>
+        </div>
+        <div class="summary-strip">
+          <div class="summary-callout">
+            <span>Customers</span>
+            <strong>${escapeHtml(formatNumber(closedAsnSummary.customers))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Closed Orders</span>
+            <strong>${escapeHtml(formatNumber(closedAsnSummary.closedOrders))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Est. Value</span>
+            <strong>${escapeHtml(formatCurrency(closedAsnSummary.estimatedValue))}</strong>
+          </div>
+        </div>
+        ${renderClosedAsnCustomerTable(ops.closedAsnByCustomer, config.timezone)}
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
             <div class="eyebrow">Customer Load</div>
             <h3>Who is driving today's order volume?</h3>
             <p>Based on parsed order XML for the selected day.</p>
@@ -1096,7 +1164,9 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
         </div>
         ${renderCustomerTable(ops.customerLoad, config.timezone)}
       </article>
+    </section>
 
+    <section class="ops-grid" style="margin-top:18px">
       <article class="panel">
         <div class="panel-head">
           <div>
@@ -1107,9 +1177,7 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
         </div>
         ${renderFolderLoad(ops.folderLoad)}
       </article>
-    </section>
 
-    <section style="margin-top:18px">
       <article class="panel">
         <div class="panel-head">
           <div>
