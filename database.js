@@ -1021,6 +1021,37 @@ class MirrorDatabase {
     return this.recentRunsStmt.all(limit);
   }
 
+  getXmlDocumentsForExport(stage, filters = {}, limit = 50000) {
+    const { whereSql, params } = this.buildXmlDocumentFilters(filters, stage);
+    const statement = this.db.prepare(`
+      SELECT
+        parsed_at,
+        folder_path,
+        remote_path,
+        file_name,
+        document_type,
+        vbeln,
+        record_key,
+        order_number,
+        order_date,
+        customer_partner_id,
+        customer_name,
+        ship_to_partner_id,
+        ship_to_name,
+        ship_to,
+        item_count,
+        total_qty,
+        run_id,
+        snapshot_path
+      FROM xml_documents
+      ${whereSql}
+      ORDER BY parsed_at ASC, id ASC
+      LIMIT ?
+    `);
+
+    return statement.all(...params, limit);
+  }
+
   getFileEventById(id) {
     return this.fileEventByIdStmt.get(id);
   }
@@ -1879,6 +1910,49 @@ class MirrorDatabase {
 
     return {
       whereSql: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+      params
+    };
+  }
+
+  buildXmlDocumentFilters(filters = {}, stage = "") {
+    const conditions = ["parse_status = 'success'"];
+    const params = [];
+
+    if (stage === "orders") {
+      conditions.push("LOWER(folder_path) LIKE ?");
+      params.push("%/orders%");
+    } else if (stage === "asn") {
+      conditions.push("LOWER(folder_path) LIKE ?");
+      params.push("%/asn%");
+    }
+
+    if (filters.q) {
+      conditions.push("(vbeln LIKE ? OR file_name LIKE ? OR remote_path LIKE ? OR customer_name LIKE ?)");
+      params.push(`%${filters.q}%`, `%${filters.q}%`, `%${filters.q}%`, `%${filters.q}%`);
+    }
+
+    if (filters.folder) {
+      conditions.push("folder_path LIKE ?");
+      params.push(`%${filters.folder}%`);
+    }
+
+    if (filters.runId) {
+      conditions.push("run_id = ?");
+      params.push(filters.runId);
+    }
+
+    if (filters.dateFromIso) {
+      conditions.push("parsed_at >= ?");
+      params.push(filters.dateFromIso);
+    }
+
+    if (filters.dateToIso) {
+      conditions.push("parsed_at < ?");
+      params.push(filters.dateToIso);
+    }
+
+    return {
+      whereSql: `WHERE ${conditions.join(" AND ")}`,
       params
     };
   }

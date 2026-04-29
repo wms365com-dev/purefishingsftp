@@ -1669,6 +1669,8 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
             <button type="submit" class="secondary"${reindexState.running ? " disabled" : ""}>Repair Old XML Data</button>
           </form>
           <a class="button-link secondary" href="${escapeHtml(links.runsCsv)}">Export Runs CSV</a>
+          <a class="button-link secondary" href="${escapeHtml(links.ordersVbelnCsv)}">Export Orders VBELN CSV</a>
+          <a class="button-link secondary" href="${escapeHtml(links.asnVbelnCsv)}">Export ASN VBELN CSV</a>
         </div>
       </aside>
     </section>
@@ -1732,6 +1734,8 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
             <button type="submit">Apply Filters</button>
             <a class="button-link secondary" href="${escapeHtml(links.currentPath || "/admin")}">Clear</a>
             <a class="button-link secondary" href="${escapeHtml(links.activityCsv)}">Export Activity CSV</a>
+            <a class="button-link secondary" href="${escapeHtml(links.ordersVbelnCsv)}">Orders VBELN CSV</a>
+            <a class="button-link secondary" href="${escapeHtml(links.asnVbelnCsv)}">ASN VBELN CSV</a>
           </div>
         </form>
         <div class="summary-grid" style="margin-top:1rem">

@@ -314,7 +314,9 @@ function buildDashboardHtml(requestUrl) {
       reindexAction: `/reindex-xml?return_to=${encodeURIComponent(returnTo)}`,
       activityCsv: `/reports/files.csv${queryString ? `?${queryString}` : ""}`,
       runsCsv: "/reports/runs.csv",
-      asnHourlyCsv: `/reports/asn-hourly.csv${asnCsvQueryString ? `?${asnCsvQueryString}` : ""}`
+      asnHourlyCsv: `/reports/asn-hourly.csv${asnCsvQueryString ? `?${asnCsvQueryString}` : ""}`,
+      ordersVbelnCsv: `/reports/orders-vbeln.csv${queryString ? `?${queryString}` : ""}`,
+      asnVbelnCsv: `/reports/asn-vbeln.csv${queryString ? `?${queryString}` : ""}`
     }
   });
 }
@@ -474,6 +476,74 @@ const server = http.createServer((request, response) => {
       200,
       rowsToCsv(
         ["id", "trigger_source", "started_at", "finished_at", "status", "discovered_files", "new_files", "changed_files", "deleted_files", "downloaded_files", "snapshot_dir", "message"],
+        rows
+      ),
+      "text/csv; charset=utf-8"
+    );
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/reports/orders-vbeln.csv") {
+    const filters = parseActivityFilters(requestUrl.searchParams);
+    const rows = database.getXmlDocumentsForExport("orders", filters, 50000).map((row) => ({
+      parsed_at: row.parsed_at,
+      order_date: row.order_date,
+      vbeln: row.vbeln,
+      record_key: row.record_key,
+      order_number: row.order_number,
+      customer_partner_id: row.customer_partner_id,
+      customer_name: row.customer_name,
+      ship_to_partner_id: row.ship_to_partner_id,
+      ship_to_name: row.ship_to_name,
+      ship_to: row.ship_to,
+      item_count: row.item_count,
+      total_qty: row.total_qty,
+      document_type: row.document_type,
+      folder_path: row.folder_path,
+      file_name: row.file_name,
+      remote_path: row.remote_path,
+      run_id: row.run_id,
+      snapshot_path: row.snapshot_path
+    }));
+
+    return sendText(
+      response,
+      200,
+      rowsToCsv(
+        ["parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
+        rows
+      ),
+      "text/csv; charset=utf-8"
+    );
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/reports/asn-vbeln.csv") {
+    const filters = parseActivityFilters(requestUrl.searchParams);
+    const rows = database.getXmlDocumentsForExport("asn", filters, 50000).map((row) => ({
+      parsed_at: row.parsed_at,
+      order_date: row.order_date,
+      vbeln: row.vbeln,
+      record_key: row.record_key,
+      order_number: row.order_number,
+      customer_partner_id: row.customer_partner_id,
+      customer_name: row.customer_name,
+      ship_to_partner_id: row.ship_to_partner_id,
+      ship_to_name: row.ship_to_name,
+      ship_to: row.ship_to,
+      item_count: row.item_count,
+      total_qty: row.total_qty,
+      document_type: row.document_type,
+      folder_path: row.folder_path,
+      file_name: row.file_name,
+      remote_path: row.remote_path,
+      run_id: row.run_id,
+      snapshot_path: row.snapshot_path
+    }));
+
+    return sendText(
+      response,
+      200,
+      rowsToCsv(
+        ["parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
         rows
       ),
       "text/csv; charset=utf-8"

@@ -9,7 +9,7 @@ It also includes:
 - Automatic XML indexing for downloaded snapshots, with parsed order/customer/ship-to/item details stored in SQLite.
 - Automatic historical XML repair when the XML parser schema changes, plus a manual "Repair Old XML Data" action in the dashboard.
 - Per-file audit history for new, changed, unchanged, and deleted files.
-- CSV exports for file activity and sync runs.
+- CSV exports for file activity, sync runs, and XML `VBELN` order/ASN checks.
 - Optional webhook and SMTP email alerts for failures, activity, and daily summaries.
 - SHA-256 checksums for archived files.
 - Optional snapshot retention cleanup.
@@ -106,6 +106,8 @@ The dashboard includes:
 - Direct download links for archived files when a snapshot exists.
 - `Export Activity CSV` for filtered file history.
 - `Export Runs CSV` for sync run summaries.
+- `Export Orders VBELN CSV` for parsed order XML rows.
+- `Export ASN VBELN CSV` for parsed ASN XML rows.
 
 ## Storage layout
 
