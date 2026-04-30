@@ -202,6 +202,17 @@ class MirrorDatabase {
         updated_at TEXT NOT NULL
       );
 
+    `);
+
+    this.ensureColumn("known_files", "file_name", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("known_files", "checksum", "TEXT");
+    this.ensureColumn("sync_runs", "deleted_files", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("xml_documents", "vbeln", "TEXT");
+    this.ensureColumn("xml_documents", "customer_partner_id", "TEXT");
+    this.ensureColumn("xml_documents", "ship_to_partner_id", "TEXT");
+    this.ensureColumn("xml_documents", "ship_to_name", "TEXT");
+
+    this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_file_events_event_at ON file_events(event_at DESC);
       CREATE INDEX IF NOT EXISTS idx_file_events_event_type ON file_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_file_events_folder_path ON file_events(folder_path);
@@ -213,14 +224,6 @@ class MirrorDatabase {
       CREATE INDEX IF NOT EXISTS idx_xml_documents_vbeln ON xml_documents(vbeln);
       CREATE INDEX IF NOT EXISTS idx_xml_document_items_document_id ON xml_document_items(document_id);
     `);
-
-    this.ensureColumn("known_files", "file_name", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("known_files", "checksum", "TEXT");
-    this.ensureColumn("sync_runs", "deleted_files", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("xml_documents", "vbeln", "TEXT");
-    this.ensureColumn("xml_documents", "customer_partner_id", "TEXT");
-    this.ensureColumn("xml_documents", "ship_to_partner_id", "TEXT");
-    this.ensureColumn("xml_documents", "ship_to_name", "TEXT");
   }
 
   ensureColumn(tableName, columnName, definition) {
