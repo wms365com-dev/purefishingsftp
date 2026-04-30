@@ -497,8 +497,8 @@ function renderSyncPanel(config, serviceState, syncHealth, dayLabel, flashMessag
 
   return `
     <aside class="hero-side">
-      <div class="eyebrow">Ops Status</div>
-      <h2>${running ? "Sync running" : (currentReindex ? "Repairing historical XML" : "Flow monitor ready")}</h2>
+      <div class="eyebrow">System Status</div>
+      <h2>${running ? "Sync running" : (currentReindex ? "Repairing historical XML" : "System ready")}</h2>
       <div class="detail-list">
         <div><strong>Remote root</strong><span>${escapeHtml(config.remoteRoot)}</span></div>
         <div><strong>Schedule</strong><span>${escapeHtml(config.schedule)}</span></div>
@@ -517,9 +517,9 @@ function renderSyncPanel(config, serviceState, syncHealth, dayLabel, flashMessag
         <form method="post" action="${escapeHtml(links.reindexAction || "/reindex-xml")}">
           <button type="submit" class="secondary"${reindexState.running ? " disabled" : ""}>Repair Old XML Data</button>
         </form>
-        <a class="button-link secondary" href="${escapeHtml(links.admin)}">Open Admin Detail</a>
+        <a class="button-link secondary" href="${escapeHtml(links.admin)}">Open Admin Workspace</a>
       </div>
-      <p class="side-note">Use Admin for sync logs, raw activity, exports, and the current mobile-style dashboard.</p>
+      <p class="side-note">Use Admin for exports, XML review, sync logs, and detailed file activity.</p>
     </aside>
   `;
 }
@@ -984,6 +984,279 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
       .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .summary-strip, .aging-grid { grid-template-columns: 1fr; }
     }
+
+    /* Internal system theme override */
+    :root {
+      --bg: #f3f2f1;
+      --panel: #ffffff;
+      --ink: #323130;
+      --muted: #605e5c;
+      --line: #edebe9;
+      --blue: #0f6cbd;
+      --green: #107c10;
+      --gold: #986f0b;
+      --red: #a4262c;
+      --shadow: none;
+      --radius: 6px;
+    }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    .page {
+      max-width: 1680px;
+      padding: 16px 20px 28px;
+    }
+    .hero-main, .hero-side, .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: none;
+      backdrop-filter: none;
+      background: var(--panel);
+    }
+    .hero-main::after {
+      display: none;
+    }
+    .hero-main {
+      padding: 18px 20px;
+    }
+    .hero-side,
+    .panel {
+      padding: 18px 20px;
+      gap: 12px;
+    }
+    .eyebrow {
+      color: #605e5c;
+      letter-spacing: 0.08em;
+      font-size: 0.72rem;
+      margin-bottom: 4px;
+    }
+    h1, h2, h3 {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #201f1e;
+      font-weight: 600;
+    }
+    h1 {
+      font-size: 1.7rem;
+      line-height: 1.2;
+      margin-top: 2px;
+    }
+    h2 {
+      font-size: 1.15rem;
+    }
+    h3 {
+      font-size: 1rem;
+    }
+    .hero-copy,
+    .panel-head p,
+    .panel-note,
+    .side-note,
+    .detail-list div {
+      color: var(--muted);
+    }
+    .hero-copy {
+      max-width: none;
+      margin: 8px 0 14px;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .mode-nav {
+      gap: 0;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .mode-nav a {
+      border-radius: 0;
+      background: transparent;
+      color: #605e5c;
+      padding: 10px 14px;
+      border-bottom: 2px solid transparent;
+      font-weight: 600;
+    }
+    .mode-nav a.active {
+      background: transparent;
+      color: var(--blue);
+      border-bottom-color: var(--blue);
+    }
+    .toolbar {
+      margin-top: 12px;
+    }
+    .toolbar form {
+      background: #faf9f8;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 8px 10px;
+    }
+    label {
+      color: #605e5c;
+      font-size: 0.85rem;
+    }
+    input[type="date"] {
+      border-radius: 2px;
+      padding: 8px 10px;
+      border-color: #c8c6c4;
+      background: #ffffff;
+    }
+    button, .button-link {
+      border-radius: 2px;
+      padding: 9px 14px;
+      background: var(--blue);
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .button-link.secondary, button.secondary {
+      background: #ffffff;
+      color: var(--ink);
+      border: 1px solid #c8c6c4;
+    }
+    .headline-metrics {
+      margin-top: 14px;
+      gap: 8px;
+    }
+    .headline-chip {
+      border-radius: 3px;
+      background: #faf9f8;
+      border: 1px solid var(--line);
+      color: #605e5c;
+      padding: 7px 10px;
+      font-size: 0.85rem;
+    }
+    .headline-chip strong {
+      color: #201f1e;
+    }
+    .detail-list {
+      gap: 0;
+      margin-top: 2px;
+    }
+    .detail-list div {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 0;
+      font-size: 0.87rem;
+    }
+    .live-box, .flash {
+      border-radius: 4px;
+      border: 1px solid #c7e0f4;
+      background: #f3f9fd;
+      color: #201f1e;
+      padding: 10px 12px;
+    }
+    .kpi-grid {
+      margin-top: 16px;
+      gap: 10px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+    .kpi-card {
+      min-height: 92px;
+      padding: 14px;
+      border-radius: 4px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      gap: 5px;
+    }
+    .kpi-card span {
+      font-size: 0.72rem;
+      color: #605e5c;
+    }
+    .kpi-card strong {
+      font-size: 1.45rem;
+      color: #201f1e;
+    }
+    .kpi-card small {
+      font-size: 0.82rem;
+      color: #605e5c;
+      line-height: 1.35;
+    }
+    .kpi-good {
+      background: #f3fbf1;
+      border-color: #dff6dd;
+    }
+    .kpi-warn {
+      background: #fdf6f6;
+      border-color: #f1d4d6;
+    }
+    .ops-grid {
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .panel-head {
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .chart-grid-line {
+      stroke: #edebe9;
+    }
+    .chart-axis-label {
+      fill: #605e5c;
+      font-size: 11px;
+    }
+    .legend-item {
+      color: #605e5c;
+      font-size: 0.84rem;
+    }
+    .funnel-bar, .folder-load-bar {
+      height: 10px;
+      background: #f3f2f1;
+    }
+    .funnel-bar span, .folder-load-bar span {
+      background: var(--blue);
+    }
+    .aging-card,
+    .summary-callout,
+    .folder-load-row {
+      border-radius: 4px;
+      background: #faf9f8;
+      border: 1px solid var(--line);
+    }
+    .aging-card strong,
+    .summary-callout strong {
+      color: #201f1e;
+    }
+    .status-pill {
+      border-radius: 3px;
+      letter-spacing: 0.04em;
+      padding: 4px 8px;
+    }
+    .status-warn {
+      background: #fde7e9;
+      color: #a4262c;
+    }
+    .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #ffffff;
+    }
+    th, td {
+      padding: 10px 12px;
+      font-size: 0.87rem;
+    }
+    th {
+      background: #faf9f8;
+      color: #605e5c;
+      font-size: 0.72rem;
+    }
+    tbody tr:nth-child(even) td {
+      background: #fcfcfb;
+    }
+    .summary-strip {
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .empty-state {
+      border-radius: 4px;
+      background: #faf9f8;
+      border: 1px dashed #c8c6c4;
+      color: #605e5c;
+      padding: 18px;
+    }
+    @media (max-width: 1320px) {
+      .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+      .page { padding: 12px; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
   </style>
 </head>
 <body>
@@ -991,9 +1264,9 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
     <section class="hero">
       <div class="hero-main">
         ${renderNavLinks(links)}
-        <div class="eyebrow">Operations Control Tower</div>
-        <h1>Monitor order flow, status, and workload before issues turn into missed hours.</h1>
-        <p class="hero-copy">This desktop view is centered on the order lifecycle instead of raw sync mechanics. Use it to see what arrived, whether ASN and receipts are keeping pace, where backlog is building, and which customers or folders are driving today’s load.</p>
+        <div class="eyebrow">Operations Workspace</div>
+        <h1>Order flow and ASN tracking</h1>
+        <p class="hero-copy">Use this screen to review daily volume, open order backlog, ASN closure, customer workload, and sync status from one internal operations view.</p>
         <div class="toolbar">
           <form method="get" action="/desktop">
             <label>Selected Day <input type="date" name="ops_date" value="${escapeHtml(ops.dateLabel)}"></label>

@@ -1621,15 +1621,206 @@ function renderDashboard({ dashboard, config, serviceState, flashMessage, filter
         align-items: flex-start;
       }
     }
+
+    /* Internal system theme override */
+    :root {
+      --bg: #f3f2f1;
+      --panel: #ffffff;
+      --panel-2: #faf9f8;
+      --line: #edebe9;
+      --text: #323130;
+      --muted: #605e5c;
+      --brand: #0f6cbd;
+      --ok: #107c10;
+      --warn: #986f0b;
+      --bad: #a4262c;
+      --radius: 6px;
+      --radius-sm: 2px;
+      --shadow: none;
+    }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .app {
+      width: min(1680px, calc(100vw - 24px));
+      padding: 12px 0 24px;
+    }
+    .hero, .card {
+      border-radius: var(--radius);
+      box-shadow: none;
+      border-color: var(--line);
+      background: var(--panel);
+    }
+    .hero {
+      padding: 16px 18px;
+      gap: 12px;
+    }
+    .eyebrow {
+      color: #605e5c;
+      letter-spacing: 0.08em;
+      font-size: 0.72rem;
+      margin-bottom: 4px;
+    }
+    .eyebrow::before {
+      display: none;
+    }
+    h1, h2, h3 {
+      color: #201f1e;
+      font-weight: 600;
+    }
+    h1 {
+      font-size: 1.55rem;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h2 {
+      font-size: 1rem;
+    }
+    .lead, .meta, .muted, .detail-list div, .mobile-card-meta, .mobile-card-note, .trend-day-meta {
+      color: var(--muted);
+    }
+    .summary-card, .status-tile, .mobile-stat,
+    .mobile-card, .folder-tab-button, .xml-doc, .intake-row,
+    .trend-day-card, .aging-card, .summary-callout {
+      border-radius: 4px;
+      background: var(--panel-2);
+      border-color: var(--line);
+      box-shadow: none;
+    }
+    button, .button-link {
+      min-height: 40px;
+      border-radius: 2px;
+      padding: 8px 12px;
+      background: var(--brand);
+      color: #fff;
+      font-weight: 600;
+    }
+    .button-link.secondary, button.secondary {
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid #c8c6c4;
+    }
+    input, select {
+      border-radius: 2px;
+      padding: 8px 10px;
+      border-color: #c8c6c4;
+      background: #ffffff;
+      color: var(--text);
+    }
+    input:focus, select:focus {
+      border-color: #0f6cbd;
+      box-shadow: 0 0 0 1px #0f6cbd;
+    }
+    .detail-list div {
+      border-bottom: 1px solid var(--line);
+      padding: 7px 0;
+    }
+    .progress-track,
+    .bar,
+    .asn-bar,
+    .trend-track,
+    .trend-total-bar,
+    .intake-strip {
+      background: #edebe9;
+      border-radius: 999px;
+    }
+    .progress-fill,
+    .bar span,
+    .asn-bar span,
+    .trend-track span,
+    .trend-total-bar span,
+    .intake-strip span {
+      background: var(--brand);
+      box-shadow: none;
+    }
+    .flash,
+    .intake-leader,
+    .asn-note {
+      border-radius: 4px;
+      background: #f3f9fd;
+      border: 1px solid #c7e0f4;
+      color: var(--text);
+    }
+    .pill, .mobile-chip, .accordion-summary-meta {
+      border-radius: 3px;
+      letter-spacing: 0.04em;
+      background: #ffffff;
+      border-color: #d2d0ce;
+      color: #605e5c;
+    }
+    .pill-success, .pill-running, .pill-new, .pill-changed {
+      background: #edf8ee;
+      color: var(--ok);
+      border-color: #c7eacc;
+    }
+    .pill-failed, .pill-deleted {
+      background: #fde7e9;
+      color: var(--bad);
+      border-color: #f1c8cc;
+    }
+    .accordion-summary {
+      padding: 14px 16px;
+    }
+    .accordion-body {
+      padding: 0 16px 16px;
+    }
+    .folder-tab-button.active,
+    .asn-card-peak {
+      background: #eff6fc;
+      border-color: #c7e0f4;
+    }
+    .xml-doc,
+    .trend-day-card,
+    .intake-row {
+      background: #ffffff;
+    }
+    .intake-rank {
+      border-radius: 4px;
+      border-color: #d2d0ce;
+      background: #faf9f8;
+      color: var(--text);
+    }
+    table {
+      background: #ffffff;
+    }
+    th, td {
+      padding: 10px 8px;
+      font-size: 0.86rem;
+    }
+    th {
+      background: #faf9f8;
+      color: #605e5c;
+      font-size: 0.72rem;
+    }
+    tbody tr:nth-child(even) td {
+      background: #fcfcfb;
+    }
+    .row-deleted,
+    .mobile-card-deleted {
+      background: #fdf3f4;
+    }
+    @media (max-width: 760px) {
+      .app {
+        background: var(--bg);
+      }
+      .hero-side {
+        border-radius: 4px;
+      }
+      .card {
+        border-radius: 4px;
+      }
+    }
   </style>
 </head>
 <body>
   <main class="app">
     <section class="hero">
       <div class="hero-copy stack">
-        <div class="eyebrow">PureFishing SFTP Mirror</div>
-        <h1>Track incoming files with a cleaner mobile ops view.</h1>
-        <p class="lead">The service mirrors new or changed SFTP files into timestamped snapshots, keeps an audit trail, and gives you report exports with live run progress.</p>
+        <div class="eyebrow">Operations Admin</div>
+        <h1>File intake, XML indexing, and audit history</h1>
+        <p class="lead">Use this page for exports, XML review, repair actions, and detailed file activity across the SFTP intake process.</p>
         <div class="summary-grid">
           <div class="summary-card"><span>Tracked Files</span><strong>${escapeHtml(summary.tracked_files || 0)}</strong></div>
           <div class="summary-card"><span>Tracked Folders</span><strong>${escapeHtml(summary.tracked_folders || 0)}</strong></div>
