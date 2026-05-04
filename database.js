@@ -475,57 +475,57 @@ class MirrorDatabase {
 
     this.opsXmlDocumentsInRangeStmt = this.db.prepare(`
       SELECT
-        parsed_at,
+        xml_documents.parsed_at,
         COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
-        folder_path,
-        remote_path,
-        file_name,
-        document_type,
-        vbeln,
-        record_key,
-        order_number,
-        order_date,
-        customer_partner_id,
-        ship_to,
-        ship_to_partner_id,
-        ship_to_name,
-        customer_name,
-        item_count,
-        total_qty
+        xml_documents.folder_path,
+        xml_documents.remote_path,
+        xml_documents.file_name,
+        xml_documents.document_type,
+        xml_documents.vbeln,
+        xml_documents.record_key,
+        xml_documents.order_number,
+        xml_documents.order_date,
+        xml_documents.customer_partner_id,
+        xml_documents.ship_to,
+        xml_documents.ship_to_partner_id,
+        xml_documents.ship_to_name,
+        xml_documents.customer_name,
+        xml_documents.item_count,
+        xml_documents.total_qty
       FROM xml_documents
       LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       WHERE
-        parse_status = 'success' AND
-        parsed_at >= ? AND
-        parsed_at < ?
-      ORDER BY parsed_at ASC, id ASC
+        xml_documents.parse_status = 'success' AND
+        xml_documents.parsed_at >= ? AND
+        xml_documents.parsed_at < ?
+      ORDER BY xml_documents.parsed_at ASC, xml_documents.id ASC
     `);
 
     this.opsXmlDocumentsThroughStmt = this.db.prepare(`
       SELECT
-        parsed_at,
+        xml_documents.parsed_at,
         COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
-        folder_path,
-        remote_path,
-        file_name,
-        document_type,
-        vbeln,
-        record_key,
-        order_number,
-        order_date,
-        customer_partner_id,
-        ship_to,
-        ship_to_partner_id,
-        ship_to_name,
-        customer_name,
-        item_count,
-        total_qty
+        xml_documents.folder_path,
+        xml_documents.remote_path,
+        xml_documents.file_name,
+        xml_documents.document_type,
+        xml_documents.vbeln,
+        xml_documents.record_key,
+        xml_documents.order_number,
+        xml_documents.order_date,
+        xml_documents.customer_partner_id,
+        xml_documents.ship_to,
+        xml_documents.ship_to_partner_id,
+        xml_documents.ship_to_name,
+        xml_documents.customer_name,
+        xml_documents.item_count,
+        xml_documents.total_qty
       FROM xml_documents
       LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       WHERE
-        parse_status = 'success' AND
-        parsed_at < ?
-      ORDER BY parsed_at ASC, id ASC
+        xml_documents.parse_status = 'success' AND
+        xml_documents.parsed_at < ?
+      ORDER BY xml_documents.parsed_at ASC, xml_documents.id ASC
     `);
 
     this.fileEventIdBySnapshotPathStmt = this.db.prepare(`
@@ -619,34 +619,34 @@ class MirrorDatabase {
 
     this.xmlDocumentsByFolderStmt = this.db.prepare(`
       SELECT
-        id,
-        file_event_id,
-        run_id,
+        xml_documents.id,
+        xml_documents.file_event_id,
+        xml_documents.run_id,
         COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
-        folder_path,
-        remote_path,
-        file_name,
-        snapshot_path,
-        document_type,
-        vbeln,
-        record_key,
-        order_number,
-        order_date,
-        customer_partner_id,
-        ship_to,
-        ship_to_partner_id,
-        ship_to_name,
-        customer_name,
-        item_count,
-        total_qty,
-        item_preview,
-        parse_status,
-        parse_message,
-        parsed_at
+        xml_documents.folder_path,
+        xml_documents.remote_path,
+        xml_documents.file_name,
+        xml_documents.snapshot_path,
+        xml_documents.document_type,
+        xml_documents.vbeln,
+        xml_documents.record_key,
+        xml_documents.order_number,
+        xml_documents.order_date,
+        xml_documents.customer_partner_id,
+        xml_documents.ship_to,
+        xml_documents.ship_to_partner_id,
+        xml_documents.ship_to_name,
+        xml_documents.customer_name,
+        xml_documents.item_count,
+        xml_documents.total_qty,
+        xml_documents.item_preview,
+        xml_documents.parse_status,
+        xml_documents.parse_message,
+        xml_documents.parsed_at
       FROM xml_documents
       LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
-      WHERE folder_path = ?
-      ORDER BY parsed_at DESC, id DESC
+      WHERE xml_documents.folder_path = ?
+      ORDER BY xml_documents.parsed_at DESC, xml_documents.id DESC
       LIMIT ?
     `);
 
@@ -1036,29 +1036,29 @@ class MirrorDatabase {
     const { whereSql, params } = this.buildXmlDocumentFilters(filters, stage);
     const statement = this.db.prepare(`
       SELECT
-        parsed_at,
+        xml_documents.parsed_at,
         COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
-        folder_path,
-        remote_path,
-        file_name,
-        document_type,
-        vbeln,
-        record_key,
-        order_number,
-        order_date,
-        customer_partner_id,
-        customer_name,
-        ship_to_partner_id,
-        ship_to_name,
-        ship_to,
-        item_count,
-        total_qty,
-        run_id,
-        snapshot_path
+        xml_documents.folder_path,
+        xml_documents.remote_path,
+        xml_documents.file_name,
+        xml_documents.document_type,
+        xml_documents.vbeln,
+        xml_documents.record_key,
+        xml_documents.order_number,
+        xml_documents.order_date,
+        xml_documents.customer_partner_id,
+        xml_documents.customer_name,
+        xml_documents.ship_to_partner_id,
+        xml_documents.ship_to_name,
+        xml_documents.ship_to,
+        xml_documents.item_count,
+        xml_documents.total_qty,
+        xml_documents.run_id,
+        xml_documents.snapshot_path
       FROM xml_documents
       LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       ${whereSql}
-      ORDER BY parsed_at ASC, id ASC
+      ORDER BY xml_documents.parsed_at ASC, xml_documents.id ASC
       LIMIT ?
     `);
 
@@ -1958,39 +1958,39 @@ class MirrorDatabase {
   }
 
   buildXmlDocumentFilters(filters = {}, stage = "") {
-    const conditions = ["parse_status = 'success'"];
+    const conditions = ["xml_documents.parse_status = 'success'"];
     const params = [];
 
     if (stage === "orders") {
-      conditions.push("LOWER(folder_path) LIKE ?");
+      conditions.push("LOWER(xml_documents.folder_path) LIKE ?");
       params.push("%/orders%");
     } else if (stage === "asn") {
-      conditions.push("LOWER(folder_path) LIKE ?");
+      conditions.push("LOWER(xml_documents.folder_path) LIKE ?");
       params.push("%/asn%");
     }
 
     if (filters.q) {
-      conditions.push("(vbeln LIKE ? OR file_name LIKE ? OR remote_path LIKE ? OR customer_name LIKE ?)");
+      conditions.push("(xml_documents.vbeln LIKE ? OR xml_documents.file_name LIKE ? OR xml_documents.remote_path LIKE ? OR xml_documents.customer_name LIKE ?)");
       params.push(`%${filters.q}%`, `%${filters.q}%`, `%${filters.q}%`, `%${filters.q}%`);
     }
 
     if (filters.folder) {
-      conditions.push("folder_path LIKE ?");
+      conditions.push("xml_documents.folder_path LIKE ?");
       params.push(`%${filters.folder}%`);
     }
 
     if (filters.runId) {
-      conditions.push("run_id = ?");
+      conditions.push("xml_documents.run_id = ?");
       params.push(filters.runId);
     }
 
     if (filters.dateFromIso) {
-      conditions.push("parsed_at >= ?");
+      conditions.push("xml_documents.parsed_at >= ?");
       params.push(filters.dateFromIso);
     }
 
     if (filters.dateToIso) {
-      conditions.push("parsed_at < ?");
+      conditions.push("xml_documents.parsed_at < ?");
       params.push(filters.dateToIso);
     }
 
