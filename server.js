@@ -321,13 +321,18 @@ function buildDashboardHtml(requestUrl) {
   });
 }
 
-function buildDesktopHtml(requestUrl) {
-  const flashMessage = requestUrl.searchParams.get("message");
-  const requestedLabel = requestUrl.searchParams.get("ops_date")?.trim() || "";
+function parseOpsDayRange(searchParams) {
+  const requestedLabel = searchParams.get("ops_date")?.trim() || "";
   const selectedRange = requestedLabel
     ? getLocalDayRange(requestedLabel, config.timezone)
     : getLocalDayRange(new Date(), config.timezone);
-  const dayRange = selectedRange || getLocalDayRange(new Date(), config.timezone);
+
+  return selectedRange || getLocalDayRange(new Date(), config.timezone);
+}
+
+function buildDesktopHtml(requestUrl) {
+  const flashMessage = requestUrl.searchParams.get("message");
+  const dayRange = parseOpsDayRange(requestUrl.searchParams);
   const compareLabel = shiftDateLabel(dayRange.label, -1);
   const compareRange = getLocalDayRange(compareLabel, config.timezone);
   const ops = database.getDesktopOpsData({
@@ -347,7 +352,8 @@ function buildDesktopHtml(requestUrl) {
       desktop: `/desktop?ops_date=${encodeURIComponent(dayRange.label)}`,
       mobile: "/mobile",
       admin: "/admin",
-      reindexAction: `/reindex-xml?return_to=${encodeURIComponent(`/desktop?ops_date=${dayRange.label}`)}`
+      reindexAction: `/reindex-xml?return_to=${encodeURIComponent(`/desktop?ops_date=${dayRange.label}`)}`,
+      orderTimelineCsv: `/reports/order-timeline.csv?ops_date=${encodeURIComponent(dayRange.label)}`
     }
   });
 }
@@ -485,6 +491,8 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && requestUrl.pathname === "/reports/orders-vbeln.csv") {
     const filters = parseActivityFilters(requestUrl.searchParams);
     const rows = database.getXmlDocumentsForExport("orders", filters, 50000).map((row) => ({
+      sftp_received_at: row.received_at,
+      indexed_at: row.parsed_at,
       parsed_at: row.parsed_at,
       order_date: row.order_date,
       vbeln: row.vbeln,
@@ -509,7 +517,7 @@ const server = http.createServer((request, response) => {
       response,
       200,
       rowsToCsv(
-        ["parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
+        ["sftp_received_at", "indexed_at", "parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
         rows
       ),
       "text/csv; charset=utf-8"
@@ -519,6 +527,8 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && requestUrl.pathname === "/reports/asn-vbeln.csv") {
     const filters = parseActivityFilters(requestUrl.searchParams);
     const rows = database.getXmlDocumentsForExport("asn", filters, 50000).map((row) => ({
+      sftp_received_at: row.received_at,
+      indexed_at: row.parsed_at,
       parsed_at: row.parsed_at,
       order_date: row.order_date,
       vbeln: row.vbeln,
@@ -543,7 +553,42 @@ const server = http.createServer((request, response) => {
       response,
       200,
       rowsToCsv(
-        ["parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
+        ["sftp_received_at", "indexed_at", "parsed_at", "order_date", "vbeln", "record_key", "order_number", "customer_partner_id", "customer_name", "ship_to_partner_id", "ship_to_name", "ship_to", "item_count", "total_qty", "document_type", "folder_path", "file_name", "remote_path", "run_id", "snapshot_path"],
+        rows
+      ),
+      "text/csv; charset=utf-8"
+    );
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/reports/order-timeline.csv") {
+    const dayRange = parseOpsDayRange(requestUrl.searchParams);
+    const compareRange = getLocalDayRange(shiftDateLabel(dayRange.label, -1), config.timezone);
+    const ops = database.getDesktopOpsData({
+      dayRange,
+      compareRange,
+      timezone: config.timezone,
+      estimatedLineValue: config.orderLineEstimatedValue,
+      timelineLookbackDays: config.opsTimelineLookbackDays
+    });
+    const rows = (ops?.receivedOrdersTimeline?.rows || []).map((row) => ({
+      vbeln: row.vbeln || row.display_key,
+      customer_name: row.customer_name,
+      ship_to_name: row.ship_to_name,
+      ship_to: row.ship_to,
+      order_date: row.order_date,
+      sftp_received_at: row.received_at,
+      asn_sent_at: row.asn_sent_at,
+      receipt_at: row.receipt_at,
+      status: row.status_label,
+      total_qty: row.total_qty,
+      item_count: row.item_count
+    }));
+
+    return sendText(
+      response,
+      200,
+      rowsToCsv(
+        ["vbeln", "customer_name", "ship_to_name", "ship_to", "order_date", "sftp_received_at", "asn_sent_at", "receipt_at", "status", "total_qty", "item_count"],
         rows
       ),
       "text/csv; charset=utf-8"

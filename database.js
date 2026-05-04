@@ -476,6 +476,7 @@ class MirrorDatabase {
     this.opsXmlDocumentsInRangeStmt = this.db.prepare(`
       SELECT
         parsed_at,
+        COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
         folder_path,
         remote_path,
         file_name,
@@ -492,6 +493,7 @@ class MirrorDatabase {
         item_count,
         total_qty
       FROM xml_documents
+      LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       WHERE
         parse_status = 'success' AND
         parsed_at >= ? AND
@@ -502,6 +504,7 @@ class MirrorDatabase {
     this.opsXmlDocumentsThroughStmt = this.db.prepare(`
       SELECT
         parsed_at,
+        COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
         folder_path,
         remote_path,
         file_name,
@@ -518,6 +521,7 @@ class MirrorDatabase {
         item_count,
         total_qty
       FROM xml_documents
+      LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       WHERE
         parse_status = 'success' AND
         parsed_at < ?
@@ -618,6 +622,7 @@ class MirrorDatabase {
         id,
         file_event_id,
         run_id,
+        COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
         folder_path,
         remote_path,
         file_name,
@@ -639,6 +644,7 @@ class MirrorDatabase {
         parse_message,
         parsed_at
       FROM xml_documents
+      LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       WHERE folder_path = ?
       ORDER BY parsed_at DESC, id DESC
       LIMIT ?
@@ -907,6 +913,7 @@ class MirrorDatabase {
     const backlog = this.buildBacklog(timeline, referenceIso);
     const pendingAsnByCustomer = this.buildPendingAsnByCustomer(timeline, referenceIso, estimatedLineValue);
     const closedAsnByCustomer = this.buildClosedAsnByCustomer(timeline, dayRange, estimatedLineValue);
+    const receivedOrdersTimeline = this.buildReceivedOrdersTimeline(timeline, dayRange);
     const hourNow = isToday ? getLocalHourOfDay(new Date().toISOString(), timezone) : null;
     const currentHourRow = hourNow === null ? null : flow.rows[hourNow];
     const peakHour = flow.summary.peakHourLabel
@@ -935,6 +942,7 @@ class MirrorDatabase {
       backlog,
       pendingAsnByCustomer,
       closedAsnByCustomer,
+      receivedOrdersTimeline,
       syncHealth,
       kpis: {
         totalNewFiles: flow.summary.totalFiles,
@@ -1029,6 +1037,7 @@ class MirrorDatabase {
     const statement = this.db.prepare(`
       SELECT
         parsed_at,
+        COALESCE(file_events.event_at, xml_documents.parsed_at) AS received_at,
         folder_path,
         remote_path,
         file_name,
@@ -1047,6 +1056,7 @@ class MirrorDatabase {
         run_id,
         snapshot_path
       FROM xml_documents
+      LEFT JOIN file_events ON file_events.id = xml_documents.file_event_id
       ${whereSql}
       ORDER BY parsed_at ASC, id ASC
       LIMIT ?
@@ -1506,7 +1516,7 @@ class MirrorDatabase {
         total_items: 0,
         ship_to_count: 0,
         shipTos: new Set(),
-        last_parsed_at: document.parsed_at
+        last_received_at: document.received_at || document.parsed_at
       };
 
       existing.order_count += 1;
@@ -1516,7 +1526,7 @@ class MirrorDatabase {
         existing.shipTos.add(document.ship_to);
       }
       existing.ship_to_count = existing.shipTos.size;
-      existing.last_parsed_at = document.parsed_at;
+      existing.last_received_at = document.received_at || document.parsed_at;
       customers.set(customerKey, existing);
     }
 
@@ -1529,7 +1539,7 @@ class MirrorDatabase {
         total_items: customer.total_items,
         estimated_value: customer.total_items * estimatedLineValue,
         ship_to_count: customer.ship_to_count,
-        last_parsed_at: customer.last_parsed_at
+        last_received_at: customer.last_received_at
       }))
       .sort((left, right) => right.order_count - left.order_count || right.total_qty - left.total_qty || left.customer_name.localeCompare(right.customer_name))
       .slice(0, 10);
@@ -1566,6 +1576,7 @@ class MirrorDatabase {
         receipt_at: null,
         returns_at: null
       };
+      const receivedAt = document.received_at || document.parsed_at;
 
       if (!existing.customer_name && document.customer_name) {
         existing.customer_name = document.customer_name;
@@ -1592,15 +1603,15 @@ class MirrorDatabase {
       }
 
       if (stage === "orders") {
-        existing.orders_at = existing.orders_at || document.parsed_at;
+        existing.orders_at = existing.orders_at || receivedAt;
         existing.item_count = Math.max(existing.item_count, Number(document.item_count || 0));
         existing.total_qty = Math.max(existing.total_qty, Number(document.total_qty || 0));
       } else if (stage === "asn") {
-        existing.asn_at = existing.asn_at || document.parsed_at;
+        existing.asn_at = existing.asn_at || receivedAt;
       } else if (stage === "receipt") {
-        existing.receipt_at = existing.receipt_at || document.parsed_at;
+        existing.receipt_at = existing.receipt_at || receivedAt;
       } else if (stage === "returns") {
-        existing.returns_at = existing.returns_at || document.parsed_at;
+        existing.returns_at = existing.returns_at || receivedAt;
       }
 
       timeline.set(documentKey, existing);
@@ -1793,6 +1804,35 @@ class MirrorDatabase {
         closedOrders: rows.reduce((sum, row) => sum + row.closed_orders, 0),
         closedLines: rows.reduce((sum, row) => sum + row.closed_lines, 0),
         estimatedValue: rows.reduce((sum, row) => sum + row.estimated_value, 0)
+      }
+    };
+  }
+
+  buildReceivedOrdersTimeline(timeline, dayRange) {
+    const rows = timeline
+      .filter((entry) => entry.orders_at && entry.orders_at >= dayRange.startIso && entry.orders_at < dayRange.endIso)
+      .map((entry) => ({
+        display_key: entry.display_key,
+        vbeln: entry.vbeln || entry.display_key,
+        customer_name: entry.customer_name || "Unknown customer",
+        ship_to_name: entry.ship_to_name || "",
+        ship_to: entry.ship_to || "",
+        order_date: entry.order_date || "",
+        received_at: entry.orders_at,
+        asn_sent_at: entry.asn_at || "",
+        receipt_at: entry.receipt_at || "",
+        item_count: entry.item_count,
+        total_qty: entry.total_qty,
+        status_label: entry.asn_at ? "Closed By ASN" : "Awaiting ASN"
+      }))
+      .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.vbeln.localeCompare(right.vbeln));
+
+    return {
+      rows: rows.slice(0, 250),
+      summary: {
+        receivedOrders: rows.length,
+        closedByAsn: rows.filter((row) => Boolean(row.asn_sent_at)).length,
+        awaitingAsn: rows.filter((row) => !row.asn_sent_at).length
       }
     };
   }

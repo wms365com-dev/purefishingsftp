@@ -349,7 +349,7 @@ function renderCustomerTable(customers, timezone) {
             <th>Item Lines</th>
             <th>Est. Value</th>
             <th>Ship Tos</th>
-            <th>Latest</th>
+            <th>Last Received</th>
           </tr>
         </thead>
         <tbody>
@@ -361,7 +361,45 @@ function renderCustomerTable(customers, timezone) {
               <td>${escapeHtml(formatNumber(customer.total_items))}</td>
               <td>${escapeHtml(formatCurrency(customer.estimated_value))}</td>
               <td>${escapeHtml(formatNumber(customer.ship_to_count))}</td>
-              <td>${escapeHtml(formatDateTime(customer.last_parsed_at, timezone))}</td>
+              <td>${escapeHtml(formatDateTime(customer.last_received_at, timezone))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderReceivedOrdersTimeline(report, timezone) {
+  const rows = report?.rows || [];
+  if (!rows.length) {
+    return `<div class="empty-state">No orders were received on the selected day.</div>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>VBELN</th>
+            <th>Customer</th>
+            <th>Order Date</th>
+            <th>SFTP Received At</th>
+            <th>ASN Sent At</th>
+            <th>Status</th>
+            <th>Qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              <td>${escapeHtml(row.vbeln || row.display_key)}</td>
+              <td>${escapeHtml(row.customer_name)}</td>
+              <td>${escapeHtml(row.order_date || "-")}</td>
+              <td>${escapeHtml(formatDateTime(row.received_at, timezone))}</td>
+              <td>${escapeHtml(formatDateTime(row.asn_sent_at, timezone))}</td>
+              <td><span class="status-pill ${row.asn_sent_at ? "" : "status-warn"}">${escapeHtml(row.status_label)}</span></td>
+              <td>${escapeHtml(formatQuantity(row.total_qty || row.item_count || 0))}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -535,6 +573,7 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
   const backlogSummary = ops.backlog?.summary || { awaitingAsn: 0, awaitingReceipt: 0, oldestAgeHours: 0 };
   const pendingAsnSummary = ops.pendingAsnByCustomer?.summary || { customers: 0, pendingOrders: 0, pendingLines: 0, estimatedValue: 0 };
   const closedAsnSummary = ops.closedAsnByCustomer?.summary || { customers: 0, closedOrders: 0, closedLines: 0, estimatedValue: 0 };
+  const receivedOrdersSummary = ops.receivedOrdersTimeline?.summary || { receivedOrders: 0, closedByAsn: 0, awaitingAsn: 0 };
   const latestRunMessage = ops.syncHealth?.latestRun?.message || "No sync message yet.";
 
   return `<!doctype html>
@@ -1297,6 +1336,32 @@ function renderDesktopDashboard({ ops, config, serviceState, flashMessage, links
     </section>
 
     <section class="ops-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">Order Timeline</div>
+            <h3>Orders received on the selected day</h3>
+            <p>This view separates the XML order date from the time the file actually landed on SFTP, and shows whether a matching ASN has been sent yet.</p>
+          </div>
+          <a class="button-link secondary" href="${escapeHtml(links.orderTimelineCsv || "#")}">Export Timeline CSV</a>
+        </div>
+        <div class="summary-strip">
+          <div class="summary-callout">
+            <span>Received Orders</span>
+            <strong>${escapeHtml(formatNumber(receivedOrdersSummary.receivedOrders))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Closed By ASN</span>
+            <strong>${escapeHtml(formatNumber(receivedOrdersSummary.closedByAsn))}</strong>
+          </div>
+          <div class="summary-callout">
+            <span>Awaiting ASN</span>
+            <strong>${escapeHtml(formatNumber(receivedOrdersSummary.awaitingAsn))}</strong>
+          </div>
+        </div>
+        ${renderReceivedOrdersTimeline(ops.receivedOrdersTimeline, config.timezone)}
+      </article>
+
       <article class="panel">
         <div class="panel-head">
           <div>
